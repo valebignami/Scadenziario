@@ -1190,7 +1190,8 @@ document.querySelectorAll(".vt-btn").forEach(b => {
 document.getElementById("cal-prev").addEventListener("click", () => calNav(-1));
 document.getElementById("cal-next").addEventListener("click", () => calNav(1));
 document.getElementById("cal-today").addEventListener("click", calToday);
-document.getElementById("btn-reset").addEventListener("click", resetDemo);
+// btn-reset rimosso dall'UI: la funzione resetDemo resta richiamabile da console se serve
+// (es. da console F12: resetDemo())
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
