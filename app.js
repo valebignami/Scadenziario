@@ -332,7 +332,6 @@ function renderKpis() {
   document.getElementById("kpi-week").textContent = counts.week;
   document.getElementById("kpi-month").textContent = counts.month;
   document.getElementById("kpi-future").textContent = counts.future;
-  document.getElementById("kpi-done").textContent = counts.done;
 
   // Evidenzia il KPI corrispondente al filtro attivo
   document.querySelectorAll(".kpi").forEach(k => {

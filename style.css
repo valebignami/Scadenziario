@@ -195,7 +195,7 @@ body {
 /* ---------- Dashboard ---------- */
 .dashboard {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
   padding: 18px 22px 6px;
 }
