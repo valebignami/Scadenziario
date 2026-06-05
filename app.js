@@ -53,17 +53,17 @@ async function sbLoadAll() {
 }
 async function sbUpsert(item) {
   const { error } = await sb.from("scadenze").upsert(toSupabase(item));
-  if (error) { console.error("Errore upsert:", error); alert("Errore salvataggio: " + error.message); }
+  if (error) { console.error("Errore upsert:", error); throw new Error(error.message || "Upsert failed"); }
 }
 async function sbUpsertMany(items) {
   if (!items.length) return;
   const rows = items.map(toSupabase);
   const { error } = await sb.from("scadenze").upsert(rows);
-  if (error) { console.error("Errore upsert bulk:", error); alert("Errore salvataggio bulk: " + error.message); }
+  if (error) { console.error("Errore upsert bulk:", error); throw new Error(error.message || "UpsertMany failed"); }
 }
 async function sbDelete(id) {
   const { error } = await sb.from("scadenze").delete().eq("id", id);
-  if (error) { console.error("Errore delete:", error); alert("Errore eliminazione: " + error.message); }
+  if (error) { console.error("Errore delete:", error); throw new Error(error.message || "Delete failed"); }
 }
 async function sbDeleteAll() {
   const { error } = await sb.from("scadenze").delete().neq("id", "__never_match__");
@@ -117,6 +117,11 @@ async function load() {
   const cloud = await sbLoadAll();
   if (cloud.length > 0) {
     state.items = cloud;
+    // Anche su dati cloud esistenti applico la migrazione (chiavi modulo legacy, notes→description)
+    if (migrateModuleKeys()) {
+      await sbUpsertMany(state.items);
+      console.log(`Migrazione cloud applicata + sincronizzata.`);
+    }
     return;
   }
   // 2) cloud vuoto → bootstrap. Se ho localStorage legacy lo migro, altrimenti carico il demo
@@ -157,13 +162,9 @@ function migrateModuleKeys() {
       changed++;
     }
   });
-  if (changed) {
-    console.log(`Migrazione dati: ${changed} modifiche applicate.`);
-    persist();
-  }
+  if (changed) console.log(`Migrazione dati: ${changed} modifiche applicate.`);
+  return changed > 0;
 }
-// persist() resta no-op per non rompere chiamate esistenti — il sync vero è in sbUpsert/sbDelete
-function persist() { /* no-op */ }
 
 // ---------- Helpers ----------
 function localISO(d) {
@@ -318,17 +319,16 @@ function toggleDrawer(force) {
 
 // ---------- Render KPI ----------
 function renderKpis() {
-  // "Tutte le scadenze" è un KPI globale (cliccarlo resetta sia modulo che status)
-  document.getElementById("kpi-all").textContent = state.items.length;
-
-  // Gli altri KPI rispettano modulo + tipo (ricorrente/una tantum): i numeri corrispondono alla lista
+  // Tutti i KPI (incluso "Tutte le scadenze") rispettano modulo + filtro tipo, e contano solo item attivi (non done)
+  // così la matematica torna sempre: kpi-all === overdue + week + month + future
   const scoped = state.items.filter(it => inModuleScope(it) && inRecurScope(it));
-
   const counts = { overdue: 0, week: 0, month: 0, future: 0, done: 0 };
   scoped.forEach(it => {
     const u = urgency(daysBetween(it.date), it.done);
     counts[u]++;
   });
+  const activeTotal = counts.overdue + counts.week + counts.month + counts.future;
+  document.getElementById("kpi-all").textContent = activeTotal;
   document.getElementById("kpi-overdue").textContent = counts.overdue;
   document.getElementById("kpi-week").textContent = counts.week;
   document.getElementById("kpi-month").textContent = counts.month;
@@ -354,7 +354,7 @@ function visibleItems() {
       if (!q) return true;
       return (it.title || "").toLowerCase().includes(q)
         || (it.ref || "").toLowerCase().includes(q)
-        || (it.notes || "").toLowerCase().includes(q);
+        || (it.description || "").toLowerCase().includes(q);
     })
     .sort((a, b) => {
       if (a.done !== b.done) return a.done ? 1 : -1;
@@ -611,7 +611,7 @@ function renderHistoryView() {
 }
 
 // ---------- Azioni riga ----------
-function handleAction(id, act) {
+async function handleAction(id, act) {
   const idx = state.items.findIndex(i => i.id === id);
   if (idx < 0) return;
   const it = state.items[idx];
@@ -620,18 +620,37 @@ function handleAction(id, act) {
     askMarkDone(it);
     return;
   } else if (act === "reopen") {
+    const snapshot = JSON.parse(JSON.stringify(it));
+    // Reopen pulisce anche doneBy/lastDoneBy/previousDate per evitare stato "fantasma"
     it.done = false;
     delete it.doneAt;
-    sbUpsert(it);
+    delete it.doneBy;
+    delete it.lastDoneBy;
+    delete it.lastDoneAt;
+    delete it.previousDate;
     renderAll();
+    try {
+      await sbUpsert(it);
+    } catch (err) {
+      state.items[idx] = snapshot;
+      renderAll();
+      alert(`Riapertura fallita, modifica annullata: ${err.message}`);
+    }
   } else if (act === "edit") {
     openModal(it);
   } else if (act === "del") {
-    if (confirm(`Eliminare "${it.title}"?`)) {
-      const removedId = it.id;
-      state.items.splice(idx, 1);
-      sbDelete(removedId);
+    if (!confirm(`Eliminare "${it.title}"?`)) return;
+    const snapshot = JSON.parse(JSON.stringify(it));
+    const removedId = it.id;
+    const removedIdx = idx;
+    state.items.splice(idx, 1);
+    renderAll();
+    try {
+      await sbDelete(removedId);
+    } catch (err) {
+      state.items.splice(removedIdx, 0, snapshot);
       renderAll();
+      alert(`Eliminazione fallita, item ripristinato: ${err.message}`);
     }
   }
 }
@@ -663,10 +682,11 @@ function confirmDone(e) {
   closeDoneModal();
 }
 
-function applyDone(id, by, note) {
+async function applyDone(id, by, note) {
   const idx = state.items.findIndex(i => i.id === id);
   if (idx < 0) return;
   const it = state.items[idx];
+  const snapshot = JSON.parse(JSON.stringify(it));
   const now = todayISO();
 
   // Aggiunge entry storico
@@ -693,8 +713,14 @@ function applyDone(id, by, note) {
     it.doneAt = now;
     it.doneBy = by || "";
   }
-  sbUpsert(it);
   renderAll();
+  try {
+    await sbUpsert(it);
+  } catch (err) {
+    state.items[idx] = snapshot;
+    renderAll();
+    alert(`Marcatura "fatta" fallita, modifica annullata: ${err.message}`);
+  }
 }
 
 // ---------- Storico (sezione nel modal principale) ----------
@@ -810,7 +836,7 @@ function updateRecurVisibility() {
   document.getElementById("f-recur-n-wrap").hidden = (type === "none");
 }
 
-function saveFromForm(e) {
+async function saveFromForm(e) {
   e.preventDefault();
   const id = document.getElementById("f-id").value;
   const data = {
@@ -824,18 +850,35 @@ function saveFromForm(e) {
   };
   if (data.recurType === "none") data.recurN = null;
 
-  let saved;
+  let saved, snapshot, idx;
   if (id) {
-    const idx = state.items.findIndex(i => i.id === id);
+    idx = state.items.findIndex(i => i.id === id);
+    if (idx < 0) {
+      alert("Scadenza non trovata (forse eliminata da un altro utente). Riapri la lista.");
+      closeModal();
+      return;
+    }
+    snapshot = JSON.parse(JSON.stringify(state.items[idx]));
     state.items[idx] = { ...state.items[idx], ...data };
     saved = state.items[idx];
   } else {
     saved = { id: uid(), done: false, ...data };
     state.items.push(saved);
   }
-  sbUpsert(saved);
   renderAll();
   closeModal();
+  try {
+    await sbUpsert(saved);
+  } catch (err) {
+    // Rollback
+    if (id) {
+      state.items[idx] = snapshot;
+    } else {
+      state.items = state.items.filter(i => i.id !== saved.id);
+    }
+    renderAll();
+    alert(`Salvataggio fallito, modifica annullata: ${err.message}`);
+  }
 }
 
 // ---------- Export / Import / Reset ----------
@@ -1056,16 +1099,24 @@ function importXlsx(file) {
         alert(msg);
         return;
       }
-      const append = confirm(
+      // Step 1: conferma intento di importare. ✕/Esc qui = annulla, NON sostituisce.
+      if (!confirm(
         `Trovate ${items.length} scadenze${errors.length ? ` (${errors.length} righe scartate)` : ""}.\n\n` +
-        `OK = aggiungi alle esistenti\nAnnulla = sostituisci tutto`
+        `Vuoi importarle?`
+      )) return;
+      // Step 2: modalità import. Default = aggiungi (sicuro). Sostituisci richiede OK esplicito.
+      const replaceAll = confirm(
+        `🚨 ATTENZIONE — Premi OK SOLO se vuoi CANCELLARE tutti i dati esistenti e sostituirli con quelli del file.\n\n` +
+        `Per aggiungere alle esistenti (operazione sicura), premi ANNULLA.`
       );
-      if (append) {
-        state.items.push(...items);
-        await sbUpsertMany(items);
-      } else {
+      if (replaceAll) {
+        // Step 3: doppia conferma per operazione distruttiva
+        if (!confirm("Ultima conferma: stai per CANCELLARE TUTTI i dati attuali (anche dei colleghi). Continuare?")) return;
         await sbDeleteAll();
         state.items = items;
+        await sbUpsertMany(items);
+      } else {
+        state.items.push(...items);
         await sbUpsertMany(items);
       }
       renderAll();
@@ -1171,14 +1222,7 @@ function downloadTemplate() {
   XLSX.utils.book_append_sheet(wb, ws2, "Istruzioni");
   XLSX.writeFile(wb, "template-scadenziario.xlsx");
 }
-async function resetDemo() {
-  if (!confirm("Sicuro di ripristinare i dati demo? Perderai TUTTE le modifiche (per tutti i colleghi).")) return;
-  await sbDeleteAll();
-  state.items = JSON.parse(JSON.stringify(window.DEMO_DATA));
-  migrateModuleKeys();
-  await sbUpsertMany(state.items);
-  renderAll();
-}
+// resetDemo rimosso: era footgun callable da console (cancellava il DB condiviso)
 
 // ---------- Wiring ----------
 document.getElementById("btn-add").addEventListener("click", () => openModal(null));
@@ -1275,8 +1319,7 @@ document.querySelectorAll(".vt-btn").forEach(b => {
 document.getElementById("cal-prev").addEventListener("click", () => calNav(-1));
 document.getElementById("cal-next").addEventListener("click", () => calNav(1));
 document.getElementById("cal-today").addEventListener("click", calToday);
-// btn-reset rimosso dall'UI: la funzione resetDemo resta richiamabile da console se serve
-// (es. da console F12: resetDemo())
+// btn-reset rimosso completamente (UI + funzione) per evitare cancellazioni accidentali del DB condiviso
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
