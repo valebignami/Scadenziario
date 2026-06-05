@@ -102,9 +102,10 @@ const state = {
   status: "all",
   recurFilter: "all",    // "all" | "recurring" | "oneshot"
   query: "",
-  view: "list",          // "list" | "calendar"
+  view: "list",          // "list" | "calendar" | "history"
   calYear: _now.getFullYear(),
-  calMonth: _now.getMonth()
+  calMonth: _now.getMonth(),
+  histPeriod: "all"      // "all" | "year" | "90" | "30"
 };
 
 const MESI_IT = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
@@ -412,6 +413,7 @@ function renderAll() {
   renderModules();
   renderKpis();
   if (state.view === "calendar") renderCalendar();
+  else if (state.view === "history") renderHistoryView();
   else renderList();
 }
 
@@ -497,10 +499,12 @@ function setView(v) {
   state.view = v;
   document.getElementById("list-wrap").hidden = (v !== "list");
   document.getElementById("calendar-wrap").hidden = (v !== "calendar");
+  document.getElementById("history-wrap").hidden = (v !== "history");
   document.querySelectorAll(".vt-btn").forEach(b => {
     b.classList.toggle("active", b.dataset.view === v);
   });
   if (v === "calendar") renderCalendar();
+  else if (v === "history") renderHistoryView();
   else renderList();
 }
 
@@ -515,6 +519,95 @@ function calToday() {
   state.calYear = t.getFullYear();
   state.calMonth = t.getMonth();
   renderCalendar();
+}
+
+// ---------- Storico globale (registro esecuzioni) ----------
+function renderHistoryView() {
+  // Raccolgo tutte le esecuzioni dei item nello scope (modulo + ricorrenti/una tantum)
+  const scoped = state.items.filter(it => inModuleScope(it) && inRecurScope(it));
+
+  const execs = [];
+  scoped.forEach(it => {
+    if (Array.isArray(it.history) && it.history.length > 0) {
+      it.history.forEach(h => execs.push({ ...h, item: it }));
+    } else if (it.done && it.doneAt) {
+      // Item già marcato done ma senza history (item legacy o creato prima dello storico)
+      execs.push({
+        doneAt: it.doneAt,
+        dueDate: it.date,
+        doneBy: it.doneBy || "",
+        note: "",
+        item: it
+      });
+    }
+  });
+
+  // Filtra per periodo + ricerca
+  const today = todayISO();
+  const q = (state.query || "").toLowerCase().trim();
+  const filtered = execs.filter(e => {
+    if (state.histPeriod && state.histPeriod !== "all") {
+      const days = daysBetweenIso(e.doneAt, today);
+      if (state.histPeriod === "30" && (days < 0 || days > 30)) return false;
+      if (state.histPeriod === "90" && (days < 0 || days > 90)) return false;
+      if (state.histPeriod === "year" && !e.doneAt.startsWith(today.slice(0, 4))) return false;
+    }
+    if (q) {
+      const hay = `${e.item.title} ${e.note || ""} ${e.doneBy || ""} ${e.item.description || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  filtered.sort((a, b) => b.doneAt.localeCompare(a.doneAt));
+
+  // Stats riassunto
+  const total = filtered.length;
+  const onTime = filtered.filter(e => daysBetweenIso(e.dueDate, e.doneAt) === 0).length;
+  const late = filtered.filter(e => daysBetweenIso(e.dueDate, e.doneAt) > 0).length;
+  const early = filtered.filter(e => daysBetweenIso(e.dueDate, e.doneAt) < 0).length;
+  const statsEl = document.getElementById("hist-stats");
+  statsEl.innerHTML = total === 0 ? "" :
+    `<strong>${total}</strong> esecuzioni · <span class="s-ontime">${onTime} puntuali</span> · <span class="s-late">${late} in ritardo</span> · <span class="s-early">${early} in anticipo</span>`;
+
+  const list = document.getElementById("history-list-global");
+  const emptyEl = document.getElementById("hist-empty");
+
+  if (filtered.length === 0) {
+    emptyEl.hidden = false;
+    list.innerHTML = "";
+    return;
+  }
+  emptyEl.hidden = true;
+
+  list.innerHTML = filtered.map(e => {
+    const it = e.item;
+    const mod = moduleOf(it.module);
+    const lateDays = daysBetweenIso(e.dueDate, e.doneAt);
+    const lateLabel = lateDays === 0 ? "puntuale"
+                    : lateDays > 0 ? `${lateDays} gg ritardo`
+                    : `${-lateDays} gg anticipo`;
+    const lateClass = lateDays > 0 ? "late" : lateDays < 0 ? "early" : "ontime";
+    return `
+      <div class="hist-global-row" data-item-id="${it.id}">
+        <div class="hist-date-cell">${fmtDate(e.doneAt)}</div>
+        <div class="hist-title-cell">
+          <strong>${escapeHtml(it.title)}</strong>
+          ${e.note ? `<span class="hist-note">${escapeHtml(e.note)}</span>` : ""}
+        </div>
+        <div><span class="chip ${it.module}">${mod.icon} ${mod.short || mod.label}</span></div>
+        <div class="hist-late ${lateClass}">${lateLabel}</div>
+        <div class="hist-by-cell">${escapeHtml(e.doneBy || "—")}</div>
+      </div>`;
+  }).join("");
+
+  list.querySelectorAll(".hist-global-row").forEach(row => {
+    row.addEventListener("click", () => {
+      const id = row.dataset.itemId;
+      const it = state.items.find(i => i.id === id);
+      if (it) openModal(it, "read");
+    });
+  });
 }
 
 // ---------- Azioni riga ----------
@@ -1134,18 +1227,14 @@ document.getElementById("modal-delete").addEventListener("click", () => {
 
 document.getElementById("search").addEventListener("input", (e) => {
   state.query = e.target.value;
-  renderList();
+  if (state.view === "history") renderHistoryView();
+  else renderList();
 });
-document.getElementById("filter-status").addEventListener("change", (e) => {
-  state.status = e.target.value;
-  renderAll();
+document.getElementById("hist-period").addEventListener("change", (e) => {
+  state.histPeriod = e.target.value;
+  if (state.view === "history") renderHistoryView();
 });
-document.getElementById("filter-recur").addEventListener("change", (e) => {
-  state.recurFilter = e.target.value;
-  renderAll();
-});
-
-// KPI cliccabili — agiscono come filtri rapidi
+// KPI cliccabili — unico modo per filtrare per stato (i dropdown sono stati rimossi per semplicità)
 // "Tutte le scadenze" → reset completo (modulo + status)
 // Altri KPI → filtrano per status mantenendo il modulo corrente (toggle sullo stesso = reset status)
 document.querySelectorAll(".kpi").forEach(k => {
@@ -1154,13 +1243,10 @@ document.querySelectorAll(".kpi").forEach(k => {
     if (status === "all") {
       state.module = "all";
       state.status = "all";
-      state.recurFilter = "all";
-      document.getElementById("filter-recur").value = "all";
     } else {
       state.status = (state.status === status) ? "all" : status;
     }
-    document.getElementById("filter-status").value = state.status;
-    // Se ero in calendario, passo alla lista per vedere il filtro applicato
+    // Se ero in calendario o storico, passo alla lista per vedere il filtro applicato
     if (state.view !== "list") setView("list");
     else renderAll();
   });

@@ -41,24 +41,12 @@
       <div class="view-toggle">
         <button class="vt-btn active" data-view="list">📋 Lista</button>
         <button class="vt-btn" data-view="calendar">📅 Calendario</button>
+        <button class="vt-btn" data-view="history">📜 Storico</button>
       </div>
       <div class="search">
         <input type="text" id="search" placeholder="🔎 Cerca scadenza, fornitore, riferimento…">
       </div>
       <div class="topbar-actions">
-        <select id="filter-recur" title="Filtra per tipo">
-          <option value="all">Tutti i tipi</option>
-          <option value="recurring">↻ Solo ricorrenti</option>
-          <option value="oneshot">Solo una tantum</option>
-        </select>
-        <select id="filter-status">
-          <option value="all">Tutti gli stati</option>
-          <option value="overdue">Scadute</option>
-          <option value="week">Prossimi 7 gg</option>
-          <option value="month">Prossimi 30 gg</option>
-          <option value="future">Oltre 30 gg</option>
-          <option value="done">Completate</option>
-        </select>
         <button class="primary-btn" id="btn-add">+ Nuova scadenza</button>
       </div>
     </header>
@@ -101,6 +89,32 @@
         <div id="empty" class="empty" hidden>
           <div class="empty-ico">📭</div>
           <div>Nessuna scadenza corrisponde al filtro.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="history-wrap" id="history-wrap" hidden>
+      <div class="hist-toolbar">
+        <select id="hist-period" title="Filtra per periodo">
+          <option value="all">Tutto lo storico</option>
+          <option value="year">Quest'anno</option>
+          <option value="90">Ultimi 90 giorni</option>
+          <option value="30">Ultimi 30 giorni</option>
+        </select>
+        <div class="hist-stats" id="hist-stats"></div>
+      </div>
+      <div class="hist-table">
+        <div class="hist-head">
+          <div>Data esec.</div>
+          <div>Scadenza</div>
+          <div>Modulo</div>
+          <div>Esito</div>
+          <div>Eseguito da</div>
+        </div>
+        <div id="history-list-global"></div>
+        <div id="hist-empty" class="empty" hidden>
+          <div class="empty-ico">📜</div>
+          <div>Nessuna esecuzione registrata per i filtri scelti.</div>
         </div>
       </div>
     </section>
