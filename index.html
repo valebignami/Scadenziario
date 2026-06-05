@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scadenziario PMI</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+</head>
+<body>
+<div class="app">
+
+  <div id="drawer-backdrop" class="drawer-backdrop"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">S</div>
+      <div>
+        <div class="brand-title">Scadenziario</div>
+      </div>
+    </div>
+
+    <nav class="modules" id="modules">
+      <button class="module-btn active" data-module="all">
+        <span class="mod-ico">📋</span><span>Tutte le scadenze</span>
+        <span class="mod-count" id="count-all">0</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <button class="ghost-btn" id="btn-export">⬇ Export Excel</button>
+      <button class="ghost-btn" id="btn-template">📄 Template Excel (per import)</button>
+      <button class="ghost-btn" id="btn-import">⬆ Import Excel</button>
+      <input type="file" id="file-import" accept=".xlsx,.xls" hidden>
+      <button class="ghost-btn danger" id="btn-reset">↺ Ripristina demo</button>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <header class="topbar">
+      <button id="hamburger" class="icon-btn hamburger-btn" aria-label="Menu">☰</button>
+      <div class="view-toggle">
+        <button class="vt-btn active" data-view="list">📋 Lista</button>
+        <button class="vt-btn" data-view="calendar">📅 Calendario</button>
+      </div>
+      <div class="search">
+        <input type="text" id="search" placeholder="🔎 Cerca scadenza, fornitore, riferimento…">
+      </div>
+      <div class="topbar-actions">
+        <select id="filter-recur" title="Filtra per tipo">
+          <option value="all">Tutti i tipi</option>
+          <option value="recurring">↻ Solo ricorrenti</option>
+          <option value="oneshot">Solo una tantum</option>
+        </select>
+        <select id="filter-status">
+          <option value="all">Tutti gli stati</option>
+          <option value="overdue">Scadute</option>
+          <option value="week">Prossimi 7 gg</option>
+          <option value="month">Prossimi 30 gg</option>
+          <option value="future">Oltre 30 gg</option>
+          <option value="done">Completate</option>
+        </select>
+        <button class="primary-btn" id="btn-add">+ Nuova scadenza</button>
+      </div>
+    </header>
+
+    <section class="dashboard">
+      <button type="button" class="kpi blue" data-status="all">
+        <div class="kpi-label">Tutte le scadenze</div>
+        <div class="kpi-value" id="kpi-all">0</div>
+      </button>
+      <button type="button" class="kpi red" data-status="overdue">
+        <div class="kpi-label">Scadute</div>
+        <div class="kpi-value" id="kpi-overdue">0</div>
+      </button>
+      <button type="button" class="kpi orange" data-status="week">
+        <div class="kpi-label">Entro 7 giorni</div>
+        <div class="kpi-value" id="kpi-week">0</div>
+      </button>
+      <button type="button" class="kpi yellow" data-status="month">
+        <div class="kpi-label">Entro 30 giorni</div>
+        <div class="kpi-value" id="kpi-month">0</div>
+      </button>
+      <button type="button" class="kpi green" data-status="future">
+        <div class="kpi-label">Future</div>
+        <div class="kpi-value" id="kpi-future">0</div>
+      </button>
+      <button type="button" class="kpi gray" data-status="done">
+        <div class="kpi-label">Completate</div>
+        <div class="kpi-value" id="kpi-done">0</div>
+      </button>
+    </section>
+
+    <section class="list-wrap" id="list-wrap">
+      <div class="list">
+        <div class="list-head">
+          <div class="lh status"></div>
+          <div class="lh title">Scadenza</div>
+          <div class="lh module">Modulo</div>
+          <div class="lh date">Data</div>
+          <div class="lh days">Giorni</div>
+          <div class="lh ref">Riferimento</div>
+          <div class="lh rec">Ricorrenza</div>
+        </div>
+        <div id="rows"></div>
+        <div id="empty" class="empty" hidden>
+          <div class="empty-ico">📭</div>
+          <div>Nessuna scadenza corrisponde al filtro.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="calendar-wrap" id="calendar-wrap" hidden>
+      <div class="cal-toolbar">
+        <button class="icon-btn cal-nav" id="cal-prev" title="Mese precedente">‹</button>
+        <h2 id="cal-title">—</h2>
+        <button class="icon-btn cal-nav" id="cal-next" title="Mese successivo">›</button>
+        <button class="ghost-btn" id="cal-today">Oggi</button>
+        <div class="cal-legend">
+          <span class="leg"><i class="leg-chip red"></i>Scaduta</span>
+          <span class="leg"><i class="leg-chip orange"></i>≤ 7 gg</span>
+          <span class="leg"><i class="leg-chip yellow"></i>≤ 30 gg</span>
+          <span class="leg"><i class="leg-chip green"></i>futura</span>
+          <span class="leg"><i class="leg-chip gray"></i>fatta</span>
+          <span class="leg">↻<i style="opacity:.55;font-style:italic"> proiezione ricorrente</i></span>
+        </div>
+      </div>
+      <div class="cal-weekdays">
+        <div>Lun</div><div>Mar</div><div>Mer</div><div>Gio</div><div>Ven</div><div>Sab</div><div>Dom</div>
+      </div>
+      <div class="cal-grid" id="cal-grid"></div>
+    </section>
+
+  </main>
+</div>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="modal-title">Nuova scadenza</h2>
+      <button class="icon-btn" id="modal-close">✕</button>
+    </div>
+    <form id="form" class="modal-body">
+      <input type="hidden" id="f-id">
+
+      <label>
+        <span>Titolo *</span>
+        <input type="text" id="f-title" required placeholder="es. Cambio olio carrello elevatore">
+      </label>
+
+      <label>
+        <span>Descrizione</span>
+        <textarea id="f-description" rows="2" placeholder="cosa è, di cosa si tratta (es. 'Versamento ritenute IRPEF e contributi INPS del mese precedente')"></textarea>
+      </label>
+
+      <div class="row">
+        <label>
+          <span>Modulo *</span>
+          <select id="f-module" required></select>
+        </label>
+        <label>
+          <span>Data scadenza *</span>
+          <input type="date" id="f-date" required>
+        </label>
+      </div>
+
+      <label>
+        <span>Riferimento</span>
+        <input type="text" id="f-ref" placeholder="es. fornitore, numero documento, responsabile">
+      </label>
+
+      <fieldset class="recur">
+        <legend>Ricorrenza</legend>
+        <div class="row">
+          <label>
+            <span>Tipo</span>
+            <select id="f-recur-type">
+              <option value="none">Nessuna (una tantum)</option>
+              <option value="day">Ogni N giorni</option>
+              <option value="month">Ogni N mesi</option>
+              <option value="year">Ogni N anni</option>
+            </select>
+          </label>
+          <label id="f-recur-n-wrap" hidden>
+            <span>N</span>
+            <input type="number" id="f-recur-n" min="1" value="1">
+          </label>
+        </div>
+      </fieldset>
+
+      <div id="history-section" class="history-section" hidden>
+        <button type="button" class="history-toggle" id="history-toggle" aria-expanded="false">
+          <span class="history-arrow">▸</span>
+          <span>Storico esecuzioni</span>
+          <span class="history-count" id="history-count">0</span>
+        </button>
+        <div id="history-list" hidden></div>
+      </div>
+
+      <div class="modal-foot">
+        <button type="button" class="ghost-btn success" id="modal-done" hidden>✓ Segna come fatta</button>
+        <button type="button" class="ghost-btn" id="modal-reopen" hidden>↺ Riapri</button>
+        <button type="button" class="ghost-btn" id="modal-edit" hidden>✎ Modifica</button>
+        <button type="button" class="ghost-btn danger" id="modal-delete" hidden>🗑 Elimina</button>
+        <div class="modal-foot-spacer"></div>
+        <button type="button" class="ghost-btn" id="modal-close-read" hidden>Chiudi</button>
+        <button type="button" class="ghost-btn" id="modal-cancel" hidden>Annulla</button>
+        <button type="submit" class="primary-btn" id="modal-save" hidden>Salva</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="done-modal" class="modal" hidden>
+  <div class="modal-card small">
+    <div class="modal-head">
+      <h2>✓ Segna come fatta</h2>
+      <button class="icon-btn" id="done-close">✕</button>
+    </div>
+    <form id="done-form" class="modal-body">
+      <div class="done-target" id="done-target">—</div>
+      <label>
+        <span>Eseguito da</span>
+        <input type="text" id="d-by" placeholder="es. nome, iniziali, reparto">
+      </label>
+      <label>
+        <span>Nota di chiusura (opzionale)</span>
+        <textarea id="d-note" rows="2" placeholder="es. nr. fattura, esito, anomalie"></textarea>
+      </label>
+      <div class="modal-foot">
+        <button type="button" class="ghost-btn" id="done-cancel">Annulla</button>
+        <button type="submit" class="primary-btn">✓ Conferma esecuzione</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
