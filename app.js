@@ -561,14 +561,13 @@ function renderHistoryView() {
 
   filtered.sort((a, b) => b.doneAt.localeCompare(a.doneAt));
 
-  // Stats riassunto
+  // Stats riassunto: anticipo conta come "puntuale" (= consegnata entro la scadenza)
   const total = filtered.length;
-  const onTime = filtered.filter(e => daysBetweenIso(e.dueDate, e.doneAt) === 0).length;
+  const onTime = filtered.filter(e => daysBetweenIso(e.dueDate, e.doneAt) <= 0).length;
   const late = filtered.filter(e => daysBetweenIso(e.dueDate, e.doneAt) > 0).length;
-  const early = filtered.filter(e => daysBetweenIso(e.dueDate, e.doneAt) < 0).length;
   const statsEl = document.getElementById("hist-stats");
   statsEl.innerHTML = total === 0 ? "" :
-    `<strong>${total}</strong> esecuzioni · <span class="s-ontime">${onTime} puntuali</span> · <span class="s-late">${late} in ritardo</span> · <span class="s-early">${early} in anticipo</span>`;
+    `<strong>${total}</strong> esecuzioni · <span class="s-ontime">${onTime} puntuali</span> · <span class="s-late">${late} in ritardo</span>`;
 
   const list = document.getElementById("history-list-global");
   const emptyEl = document.getElementById("hist-empty");
@@ -584,10 +583,9 @@ function renderHistoryView() {
     const it = e.item;
     const mod = moduleOf(it.module);
     const lateDays = daysBetweenIso(e.dueDate, e.doneAt);
-    const lateLabel = lateDays === 0 ? "puntuale"
-                    : lateDays > 0 ? `${lateDays} gg ritardo`
-                    : `${-lateDays} gg anticipo`;
-    const lateClass = lateDays > 0 ? "late" : lateDays < 0 ? "early" : "ontime";
+    // Solo due categorie: puntuale (entro la scadenza, anche in anticipo) o in ritardo
+    const lateLabel = lateDays > 0 ? `${lateDays} gg in ritardo` : "puntuale";
+    const lateClass = lateDays > 0 ? "late" : "ontime";
     return `
       <div class="hist-global-row" data-item-id="${it.id}">
         <div class="hist-date-cell">${fmtDate(e.doneAt)}</div>
@@ -743,10 +741,9 @@ function renderHistory(item) {
   const entries = item.history.slice().sort((a, b) => b.doneAt.localeCompare(a.doneAt));
   list.innerHTML = entries.map(h => {
     const late = daysBetweenIso(h.dueDate, h.doneAt);
-    const lateLabel = late === 0 ? "puntuale"
-                    : late > 0 ? `${late} gg in ritardo`
-                    : `${-late} gg in anticipo`;
-    const lateClass = late > 0 ? "late" : late < 0 ? "early" : "ontime";
+    // Solo due categorie: puntuale (entro la scadenza) o in ritardo
+    const lateLabel = late > 0 ? `${late} gg in ritardo` : "puntuale";
+    const lateClass = late > 0 ? "late" : "ontime";
     const metaParts = [];
     if (h.doneBy) metaParts.push(`<span class="hist-by">${escapeHtml(h.doneBy)}</span>`);
     if (h.note) metaParts.push(`<span class="hist-note">${escapeHtml(h.note)}</span>`);
@@ -957,7 +954,7 @@ function exportXlsx() {
         "Titolo": it.title,
         "Data scadenza originale": h.dueDate,
         "Ritardo (giorni)": late,
-        "Esito": late > 0 ? "In ritardo" : late < 0 ? "In anticipo" : "Puntuale",
+        "Esito": late > 0 ? "In ritardo" : "Puntuale",
         "Eseguito da": h.doneBy || "",
         "Nota": h.note || ""
       });
