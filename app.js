@@ -22,7 +22,8 @@ function toSupabase(item) {
     last_done_at: item.lastDoneAt || null,
     last_done_by: item.lastDoneBy || null,
     previous_date: item.previousDate || null,
-    history: Array.isArray(item.history) ? item.history : []
+    history: Array.isArray(item.history) ? item.history : [],
+    responsabili: Array.isArray(item.responsabili) ? item.responsabili : []
   };
 }
 function fromSupabase(row) {
@@ -41,7 +42,8 @@ function fromSupabase(row) {
     lastDoneAt: row.last_done_at || null,
     lastDoneBy: row.last_done_by || null,
     previousDate: row.previous_date || null,
-    history: Array.isArray(row.history) ? row.history : []
+    history: Array.isArray(row.history) ? row.history : [],
+    responsabili: Array.isArray(row.responsabili) ? row.responsabili : []
   };
 }
 
@@ -232,9 +234,9 @@ function inRecurScope(it) {
 }
 function inResponsabileScope(it) {
   if (state.responsabile === "all") return true;
-  const r = (it.ref || "").trim();
-  if (state.responsabile === "__none__") return !r;
-  return r === state.responsabile;
+  const resp = Array.isArray(it.responsabili) ? it.responsabili : [];
+  if (state.responsabile === "__none__") return resp.length === 0;
+  return resp.includes(state.responsabile);
 }
 function fmtRelativeDays(days) {
   if (days === 0) return "oggi";
@@ -314,40 +316,47 @@ function renderModules() {
   });
 }
 
-// ---------- Render sidebar Responsabili ----------
+// ---------- Render sidebar Responsabili (lista fissa DIPENDENTI) ----------
 function renderResponsabili() {
   const nav = document.getElementById("responsabili");
   if (!nav) return;
+  const dipendenti = window.DIPENDENTI || [];
 
-  // Conta non-completati per ogni responsabile, rispettando il filtro modulo + tipo (per coerenza scope)
-  const inOtherScope = it => inModuleScope(it) && inRecurScope(it) && inResponsabileScope(it);
-  const counts = new Map();
+  // Conta non-completati per ogni dipendente nel modulo+tipo correnti.
+  // NB: NON applico inResponsabileScope qui (sarebbe circolare).
+  const inOtherScope = it => inModuleScope(it) && inRecurScope(it);
+  const counts = Object.fromEntries(dipendenti.map(n => [n, 0]));
   let unassigned = 0;
+  let total = 0;
   state.items.forEach(it => {
     if (!inOtherScope(it)) return;
     if (it.done) return;
-    const r = (it.ref || "").trim();
-    if (!r) unassigned++;
-    else counts.set(r, (counts.get(r) || 0) + 1);
+    total++;
+    const resp = Array.isArray(it.responsabili) ? it.responsabili : [];
+    if (resp.length === 0) {
+      unassigned++;
+    } else {
+      // Co-responsabili: incrementa il contatore di ciascuno
+      resp.forEach(n => {
+        if (counts[n] !== undefined) counts[n]++;
+      });
+    }
   });
-  const total = Array.from(counts.values()).reduce((a, b) => a + b, 0) + unassigned;
-  const sorted = Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
   nav.innerHTML = `
     <button class="resp-btn ${state.responsabile === "all" ? "active" : ""}" data-resp="all">
       <span>Tutti</span>
       <span class="resp-count">${total}</span>
     </button>
-    ${sorted.map(([name, count]) => `
+    ${dipendenti.map(name => `
       <button class="resp-btn ${state.responsabile === name ? "active" : ""}" data-resp="${escapeHtml(name)}">
         <span>${escapeHtml(name)}</span>
-        <span class="resp-count">${count}</span>
+        <span class="resp-count">${counts[name]}</span>
       </button>`).join("")}
-    ${unassigned > 0 ? `
-      <button class="resp-btn ${state.responsabile === "__none__" ? "active" : ""}" data-resp="__none__">
-        <span class="resp-name-empty">— Non assegnato</span>
-        <span class="resp-count">${unassigned}</span>
-      </button>` : ""}
+    <button class="resp-btn ${state.responsabile === "__none__" ? "active" : ""}" data-resp="__none__">
+      <span class="resp-name-empty">— Non assegnato</span>
+      <span class="resp-count">${unassigned}</span>
+    </button>
   `;
 
   nav.querySelectorAll(".resp-btn").forEach(btn => {
@@ -440,7 +449,7 @@ function renderList() {
         <div><span class="chip ${it.module}">${mod.icon} ${mod.short || mod.label}</span></div>
         <div>${fmtDate(it.date)}</div>
         <div class="days-cell ${color}" title="${it.done ? 'completata' : days + ' giorni'}">${daysTxt}</div>
-        <div class="ref-cell">${escapeHtml(it.ref || "—")}</div>
+        <div class="ref-cell">${escapeHtml((Array.isArray(it.responsabili) && it.responsabili.length) ? it.responsabili.join(", ") : "—")}</div>
         <div class="rec-cell">${recurLabel(it)}</div>
       </div>`;
   }).join("");
@@ -836,6 +845,23 @@ function populateModuleSelect() {
     .join("");
 }
 
+function populateResponsabiliCheckboxes(selected = []) {
+  const wrap = document.getElementById("f-responsabili");
+  if (!wrap) return;
+  const dipendenti = window.DIPENDENTI || [];
+  const sel = new Set(Array.isArray(selected) ? selected : []);
+  wrap.innerHTML = dipendenti.map(name => `
+    <label>
+      <input type="checkbox" name="responsabili" value="${escapeHtml(name)}" ${sel.has(name) ? "checked" : ""}>
+      <span>${escapeHtml(name)}</span>
+    </label>`).join("");
+}
+
+function readResponsabiliFromForm() {
+  return Array.from(document.querySelectorAll('#f-responsabili input[type="checkbox"]:checked'))
+    .map(c => c.value);
+}
+
 let _modalMode = "edit"; // "read" | "edit"
 let _modalFromStorico = false; // true se la scheda è stata aperta cliccando una riga nello Storico
 
@@ -856,6 +882,7 @@ function openModal(item, mode, fromStorico = false) {
   document.getElementById("f-module").value = item?.module || window.MODULES[0].key;
   document.getElementById("f-date").value = item?.date || todayISO();
   document.getElementById("f-ref").value = item?.ref || "";
+  populateResponsabiliCheckboxes(item?.responsabili || []);
   document.getElementById("f-recur-type").value = item?.recurType || "none";
   document.getElementById("f-recur-n").value = item?.recurN || 1;
   updateRecurVisibility();
@@ -920,6 +947,7 @@ async function saveFromForm(e) {
     module: document.getElementById("f-module").value,
     date: document.getElementById("f-date").value,
     ref: document.getElementById("f-ref").value.trim(),
+    responsabili: readResponsabiliFromForm(),
     recurType: document.getElementById("f-recur-type").value,
     recurN: parseInt(document.getElementById("f-recur-n").value, 10) || 1
   };
@@ -979,7 +1007,8 @@ function exportXlsx() {
     "Descrizione": it.description || "",
     "Data scadenza": it.date,
     "Giorni alla scadenza": it.done ? "" : daysBetween(it.date),
-    "Responsabile": it.ref || "",
+    "Riferimento": it.ref || "",
+    "Responsabili": (Array.isArray(it.responsabili) ? it.responsabili : []).join(", "),
     "Ricorrenza": recurLabel(it),
     "Ultima esecuzione": it.lastDoneAt || it.doneAt || "",
     "Eseguito da (ultima)": it.lastDoneBy || it.doneBy || "",
@@ -994,6 +1023,7 @@ function exportXlsx() {
     { wch: 14 }, // data
     { wch: 10 }, // giorni
     { wch: 32 }, // riferimento
+    { wch: 28 }, // responsabili
     { wch: 18 }, // ricorrenza
     { wch: 16 }, // ultima esecuzione
     { wch: 20 }, // eseguito da
@@ -1158,7 +1188,11 @@ function importXlsx(file) {
           description,
           module: modKey,
           date,
-          ref: String(pick(r, "Responsabile", "responsabile", "Riferimento", "riferimento", "Ref") || "").trim(),
+          ref: String(pick(r, "Riferimento", "riferimento", "Ref") || "").trim(),
+          responsabili: String(pick(r, "Responsabili", "responsabili", "Responsabile", "responsabile") || "")
+            .split(",")
+            .map(s => s.trim())
+            .filter(s => s && (window.DIPENDENTI || []).includes(s)),
           recurType, recurN,
           done
         };
@@ -1225,7 +1259,8 @@ function downloadTemplate() {
       "Descrizione": "Versamento mensile dell'acconto accise sull'energia elettrica autoconsumata. Periodo: mese solare precedente. Calcolo: (kWh totali × 28,41%) × 0,0125. Rif. Testo Unico Accise + Decreto MEF 10.03.2026.",
       "Modulo": "Fisco",
       "Data scadenza": "2026-06-30",
-      "Responsabile": "Anna Rossi (Amministrazione)",
+      "Riferimento": "Agenzia delle Entrate / Studio commercialista",
+      "Responsabili": "Marco, Valentina",
       "Ricorrenza": "ogni 1 mese",
       "Eseguito da": "",
       "Stato": ""
@@ -1235,7 +1270,8 @@ function downloadTemplate() {
       "Descrizione": "Dichiarazione semestrale dei consumi di energia elettrica (periodo gennaio-giugno) all'Agenzia delle Dogane. Invio telematico tramite Portale Dogane.",
       "Modulo": "Fisco",
       "Data scadenza": "2026-09-30",
-      "Responsabile": "Anna Rossi (Amministrazione)",
+      "Riferimento": "Agenzia delle Entrate / Studio commercialista",
+      "Responsabili": "Marco, Valentina",
       "Ricorrenza": "ogni 1 anno",
       "Eseguito da": "",
       "Stato": ""
@@ -1245,7 +1281,8 @@ function downloadTemplate() {
       "Descrizione": "Pagamento (o credito) della differenza tra accise dovute sul semestre e acconti versati. Calcolo: (Σ kWh × 28,41% × 0,0125 €/kWh) − Σ acconti mensili versati.",
       "Modulo": "Fisco",
       "Data scadenza": "2026-09-30",
-      "Responsabile": "Anna Rossi (Amministrazione)",
+      "Riferimento": "Agenzia delle Entrate / Studio commercialista",
+      "Responsabili": "Davide",
       "Ricorrenza": "ogni 1 anno",
       "Eseguito da": "",
       "Stato": ""
@@ -1255,7 +1292,8 @@ function downloadTemplate() {
       "Descrizione": "Sorveglianza sanitaria obbligatoria art. 41 D.Lgs. 81/08 per lavoratori esposti a rischi specifici. Lavoratore: Sig. Marchetti.",
       "Modulo": "Personale",
       "Data scadenza": "15/12/2026",
-      "Responsabile": "Marco Bianchi (HSE)",
+      "Riferimento": "Medico competente Dr. Galli",
+      "Responsabili": "Marco, Roberto M",
       "Ricorrenza": "ogni 1 anno",
       "Eseguito da": "",
       "Stato": ""
@@ -1268,6 +1306,7 @@ function downloadTemplate() {
     { wch: 20 }, // modulo
     { wch: 14 }, // data
     { wch: 38 }, // riferimento
+    { wch: 28 }, // responsabili
     { wch: 16 }, // ricorrenza
     { wch: 18 }, // eseguito da
     { wch: 14 }  // stato
@@ -1282,7 +1321,9 @@ function downloadTemplate() {
     ["Modulo", "consigliato",
       "uno tra: Personale | Fisco | Manutenzione | Fornitori | Clienti | Utenze (match parziale supportato)"],
     ["Data scadenza", "SÌ", "formati ammessi: 2026-09-30 (ISO), 30/09/2026, 30-09-2026, oppure data nativa Excel"],
-    ["Responsabile", "no", "nome del responsabile assegnato (es. 'Anna Rossi', 'M. Bianchi', 'Studio Collarini'). La sidebar 'Responsabili' filtra automaticamente per questo campo."],
+    ["Riferimento", "no", "testo libero: riferimento esterno (es. 'Agenzia delle Entrate', 'Studio Collarini', 'Fornitore X')"],
+    ["Responsabili", "no",
+      "uno o più dipendenti separati da virgola. Valori ammessi (lista corrente): " + (window.DIPENDENTI || []).join(", ") + ". Es. 'Marco' oppure 'Marco, Valentina'. Nomi sconosciuti vengono ignorati."],
     ["Ricorrenza", "no",
       "formula 'ogni N giorni|mesi|anni'. Esempi: 'ogni 1 mese', 'ogni 2 mesi', 'ogni 3 mesi', 'ogni 1 anno'. VUOTO = una tantum"],
     ["Eseguito da", "no", "testo (nome/iniziali). Si combina con 'Stato'=Completata per registrare lo storico"],

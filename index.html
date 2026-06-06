@@ -85,7 +85,7 @@
           <div class="lh module">Modulo</div>
           <div class="lh date">Data</div>
           <div class="lh days">Giorni</div>
-          <div class="lh ref">Responsabile</div>
+          <div class="lh ref">Responsabili</div>
           <div class="lh rec">Ricorrenza</div>
         </div>
         <div id="rows"></div>
@@ -176,9 +176,14 @@
       </div>
 
       <label>
-        <span>Responsabile</span>
-        <input type="text" id="f-ref" placeholder="es. Anna Rossi, M. Bianchi, Studio Collarini">
+        <span>Riferimento</span>
+        <input type="text" id="f-ref" placeholder="es. Studio Rossi, Agenzia delle Entrate, fornitore esterno">
       </label>
+
+      <fieldset class="responsabili-fieldset">
+        <legend>Responsabili interni</legend>
+        <div id="f-responsabili" class="responsabili-checkboxes"></div>
+      </fieldset>
 
       <fieldset class="recur">
         <legend>Ricorrenza</legend>

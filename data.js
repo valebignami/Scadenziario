@@ -1,4 +1,8 @@
 // Definizione moduli e dati demo dello scadenziario PMI
+// Lista dipendenti — modificabile facilmente: aggiungi/rimuovi un nome
+// e fai commit/push. Tutti vedranno la nuova lista entro 1-2 minuti.
+window.DIPENDENTI = ["Marco", "Davide", "Roberto M", "Roberto L", "Elisa", "Valentina"];
+
 window.MODULES = [
   { key: "personale",    label: "Personale",    short: "Personale",    icon: "👥" },
   { key: "fisco",        label: "Fisco",        short: "Fisco",        icon: "⚖️" },

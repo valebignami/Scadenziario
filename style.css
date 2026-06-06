@@ -577,6 +577,43 @@ body {
   margin: 0;
 }
 .recur legend { font-size: 12px; color: var(--ink-soft); font-weight: 600; padding: 0 6px; }
+.responsabili-fieldset {
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  padding: 10px 14px 14px;
+  margin: 0;
+}
+.responsabili-fieldset legend {
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-weight: 600;
+  padding: 0 6px;
+}
+.responsabili-checkboxes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px 14px;
+  margin-top: 4px;
+}
+.responsabili-checkboxes label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.responsabili-checkboxes input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--brand);
+}
+.modal-card.read-mode .responsabili-checkboxes input[type="checkbox"] {
+  pointer-events: none;
+  opacity: .8;
+}
 .modal-foot {
   display: flex;
   align-items: center;
