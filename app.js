@@ -603,7 +603,7 @@ function renderHistoryView() {
     row.addEventListener("click", () => {
       const id = row.dataset.itemId;
       const it = state.items.find(i => i.id === id);
-      if (it) openModal(it, "read");
+      if (it) openModal(it, "read", true); // fromStorico → mostra Riapri al posto di "Segna come fatta"
     });
   });
 }
@@ -619,13 +619,27 @@ async function handleAction(id, act) {
     return;
   } else if (act === "reopen") {
     const snapshot = JSON.parse(JSON.stringify(it));
-    // Reopen pulisce anche doneBy/lastDoneBy/previousDate per evitare stato "fantasma"
+    // Riapri = annulla l'ultima esecuzione registrata
+    // - Per ricorrenti: ripristina la data alla scadenza dell'ultima esecuzione (rollback)
+    // - Per una tantum: pulisce lo stato done
+    // - In entrambi i casi: rimuove l'ultima entry dallo storico e ricalcola lastDoneAt/By dal penultimo
+    const isRecur = !!(it.recurType && it.recurType !== "none");
+    if (Array.isArray(it.history) && it.history.length > 0) {
+      const last = it.history.pop();
+      if (isRecur && last.dueDate) it.date = last.dueDate;
+    }
     it.done = false;
     delete it.doneAt;
     delete it.doneBy;
-    delete it.lastDoneBy;
-    delete it.lastDoneAt;
     delete it.previousDate;
+    if (Array.isArray(it.history) && it.history.length > 0) {
+      const prev = it.history[it.history.length - 1];
+      it.lastDoneAt = prev.doneAt;
+      it.lastDoneBy = prev.doneBy;
+    } else {
+      delete it.lastDoneAt;
+      delete it.lastDoneBy;
+    }
     renderAll();
     try {
       await sbUpsert(it);
@@ -770,10 +784,12 @@ function populateModuleSelect() {
 }
 
 let _modalMode = "edit"; // "read" | "edit"
+let _modalFromStorico = false; // true se la scheda è stata aperta cliccando una riga nello Storico
 
-function openModal(item, mode) {
+function openModal(item, mode, fromStorico = false) {
   // Default: item esistente → read, nuovo → edit
   _modalMode = mode || (item ? "read" : "edit");
+  _modalFromStorico = !!fromStorico;
 
   const isNew = !item;
   document.getElementById("modal-title").textContent =
@@ -802,14 +818,22 @@ function applyModalMode(item) {
   const isRead = _modalMode === "read";
   const isNew = !item;
   const isDone = !!(item && item.done);
+  const hasHistory = !!(item && Array.isArray(item.history) && item.history.length > 0);
+  const fromStorico = _modalFromStorico;
 
   card.classList.toggle("read-mode", isRead);
 
   // Bottoni footer
   // Read mode: scheda di sola lettura → bottoni azione + Chiudi
   // Edit mode: form editabile → Annulla + Salva
-  document.getElementById("modal-done").hidden     = !isRead || isNew || isDone;
-  document.getElementById("modal-reopen").hidden   = !isRead || isNew || !isDone;
+  // Da Storico: forza Riapri al posto di "Segna come fatta" (= annulla ultima esecuzione)
+  if (fromStorico) {
+    document.getElementById("modal-done").hidden   = true;
+    document.getElementById("modal-reopen").hidden = !isRead || isNew || !(isDone || hasHistory);
+  } else {
+    document.getElementById("modal-done").hidden   = !isRead || isNew || isDone;
+    document.getElementById("modal-reopen").hidden = !isRead || isNew || !isDone;
+  }
   document.getElementById("modal-edit").hidden     = !isRead || isNew;
   document.getElementById("modal-delete").hidden   = !isRead || isNew;
   document.getElementById("modal-close-read").hidden = !isRead;
@@ -827,6 +851,7 @@ function switchToEditMode() {
 
 function closeModal() {
   document.getElementById("modal").hidden = true;
+  _modalFromStorico = false;
 }
 function updateRecurVisibility() {
   const type = document.getElementById("f-recur-type").value;
