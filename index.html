@@ -5,10 +5,41 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Scadenziario PMI</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4/dist/flatpickr.min.css">
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+<!-- flatpickr senza defer di proposito: app.js lo legge a load-time, deve essere già pronto.
+     Versione pinned a @4 per evitare breaking change su major bump. -->
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4/dist/l10n/it.js"></script>
 </head>
 <body>
-<div class="app">
+
+<!-- Overlay login: parte nascosto, INITIAL_SESSION decide se mostrarlo (no flash al reload con sessione valida) -->
+<div id="login-overlay" class="login-overlay" style="display: none">
+  <div class="login-card">
+    <div class="login-brand">
+      <div class="brand-mark">S</div>
+      <div>
+        <div class="brand-title">Scadenziario</div>
+        <div class="login-subtitle">Accesso riservato</div>
+      </div>
+    </div>
+    <form id="login-form" class="login-form">
+      <label>
+        <span>Email</span>
+        <input type="email" id="login-email" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Password</span>
+        <input type="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <div id="login-error" class="login-error" hidden></div>
+      <button type="submit" class="primary-btn" id="login-submit">Accedi</button>
+    </form>
+  </div>
+</div>
+
+<div class="app" id="app-root" hidden>
 
   <div id="drawer-backdrop" class="drawer-backdrop"></div>
   <aside class="sidebar" id="sidebar">
@@ -26,7 +57,7 @@
       </button>
     </nav>
 
-    <div class="sidebar-section-title">👥 Responsabili</div>
+    <label class="sidebar-section-title sidebar-section-label" for="responsabili-select">👥 Responsabili</label>
     <select id="responsabili-select" class="responsabili-select"></select>
 
     <div class="sidebar-foot">
@@ -34,6 +65,10 @@
       <button class="ghost-btn" id="btn-template">📄 Template Excel (per import)</button>
       <button class="ghost-btn" id="btn-import">⬆ Import Excel</button>
       <input type="file" id="file-import" accept=".xlsx,.xls" hidden>
+      <div class="sidebar-user">
+        <span class="sidebar-user-email" id="user-email">—</span>
+        <button class="ghost-btn logout-btn" id="btn-logout" title="Esci">🚪 Esci</button>
+      </div>
     </div>
   </aside>
 
@@ -50,6 +85,7 @@
         <input type="text" id="search" placeholder="🔎 Cerca per titolo, descrizione o responsabile…">
       </div>
       <div class="topbar-actions">
+        <button class="btn-clear-filters" id="btn-clear-filters" hidden>✕ Pulisci filtri</button>
         <button class="primary-btn" id="btn-add">+ Nuova scadenza</button>
       </div>
     </header>

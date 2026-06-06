@@ -3,7 +3,213 @@
 // ============================================================
 const SUPABASE_URL = "https://cqdmfhdcdvaezmexzxrq.supabase.co";
 const SUPABASE_KEY = "sb_publishable_1ECriACxKWx6_4GPxyMXVQ_MPVc2GYy";
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// (Fix #2) Se la libreria supabase-js non si è caricata (CDN bloccata, offline, ad-blocker),
+// mostriamo un errore amichevole nel login overlay invece di schermata bianca.
+if (typeof window.supabase === "undefined" || typeof window.supabase.createClient !== "function") {
+  const _showFatal = () => {
+    const overlay = document.getElementById("login-overlay");
+    const errEl = document.getElementById("login-error");
+    const form = document.getElementById("login-form");
+    if (overlay) overlay.style.display = "flex";
+    if (errEl) {
+      errEl.textContent = "Errore di rete: librerie non caricate. Disattiva ad-blocker/VPN e ricarica la pagina (Ctrl+F5).";
+      errEl.hidden = false;
+    }
+    if (form) form.querySelectorAll("input,button").forEach(el => { el.disabled = true; });
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", _showFatal);
+  } else {
+    _showFatal();
+  }
+  // Ferma esecuzione: senza sb-js nessun handler ha senso
+  throw new Error("supabase-js non caricato — script halted");
+}
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    persistSession: true,        // salva sessione in localStorage → resti loggato
+    autoRefreshToken: true,      // rinnova token JWT automaticamente
+    detectSessionInUrl: false
+  }
+});
+
+// ============================================================
+// AUTH — login con email/password, sessione persistente
+// ============================================================
+function showLogin(errorMessage) {
+  document.getElementById("app-root").hidden = true;
+  document.getElementById("login-overlay").style.display = "flex";
+  const err = document.getElementById("login-error");
+  if (errorMessage) {
+    err.textContent = errorMessage;
+    err.hidden = false;
+  } else {
+    err.hidden = true;
+  }
+  // (Fix #11) Focus solo se l'utente NON sta già interagendo con un input
+  // (es. sta digitando la password e arriva un evento auth → non gli sposto il cursore)
+  setTimeout(() => {
+    const active = document.activeElement;
+    const userIsTyping = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
+    if (!userIsTyping || active === document.body) {
+      const emailEl = document.getElementById("login-email");
+      if (emailEl && !emailEl.value) emailEl.focus();
+    }
+  }, 50);
+}
+
+function hideLogin() {
+  document.getElementById("login-overlay").style.display = "none";
+  document.getElementById("app-root").hidden = false;
+}
+
+// Detection robusta di errori auth/RLS — usata da boot e da tutti i CRUD
+// (Fix #6) Preferiamo status code e codici PostgREST a substring fuzzy
+function isAuthError(e) {
+  if (!e) return false;
+  if (e.status === 401 || e.status === 403) return true;
+  if (e.code === "PGRST301" || e.code === "PGRST302") return true; // PostgREST: JWT expired/invalid
+  if (e.name === "AuthError" || e.name === "AuthApiError") return true;
+  const msg = (e.message || "").toLowerCase();
+  return msg.includes("jwt") ||
+         msg.includes("not authenticated") ||
+         msg.includes("unauthorized") ||
+         msg.includes("permission denied") ||
+         msg.includes("row-level security") ||
+         msg.includes("row level security") ||
+         msg.includes("rls");
+}
+
+// (Fix #3) Se un errore di qualsiasi CRUD è di tipo auth/RLS,
+// faccio signOut + login senza che l'utente debba indovinare.
+// (Fix #7) Se signOut fallisce (rete), avviso che la sessione lato server potrebbe essere ancora viva.
+let _authErrorHandled = false;
+async function handleAuthErrorIfAny(e) {
+  if (!isAuthError(e)) return false;
+  if (_authErrorHandled) return true; // evita doppio signOut se più CRUD falliscono in serie
+  _authErrorHandled = true;
+  let signOutOk = true;
+  try {
+    const r = await sb.auth.signOut();
+    if (r && r.error) signOutOk = false;
+  } catch (_) {
+    signOutOk = false;
+  }
+  showLogin(signOutOk
+    ? "Sessione scaduta. Effettua di nuovo l'accesso."
+    : "Sessione scaduta ma logout non confermato (rete?). Effettua login: se persiste, ricarica con Ctrl+F5.");
+  return true;
+}
+
+// (Fix #2) Cleanup realtime estratto come helper riutilizzabile
+async function sbUnsubscribe() {
+  if (_sbChannel) {
+    try { await sb.removeChannel(_sbChannel); } catch (_) {}
+    _sbChannel = null;
+  }
+}
+
+// (Fix #11) Reset filtri/ricerca tra utenti diversi.
+// (Fix #10) NON resetta state.view né calYear/calMonth → l'utente torna dove era prima del logout.
+function resetUiState() {
+  state.module = "all";
+  state.status = "all";
+  state.recurFilter = "all";
+  state.responsabile = "all";
+  state.query = "";
+  state.histPeriod = "all";
+  // Allinea anche il DOM (input non controllati)
+  const search = document.getElementById("search");
+  if (search) search.value = "";
+  const histPeriod = document.getElementById("hist-period");
+  if (histPeriod) histPeriod.value = "all";
+  const respSel = document.getElementById("responsabili-select");
+  if (respSel) respSel.value = "all";
+}
+
+// (Fix #5) Chiusura modali in stato pendente al logout
+function closeAllModalsForLogout() {
+  const modal = document.getElementById("modal");
+  if (modal) modal.hidden = true;
+  const doneModal = document.getElementById("done-modal");
+  if (doneModal) doneModal.hidden = true;
+  _pendingDoneId = null;
+  _modalFromStorico = false;
+}
+
+async function handleLoginSubmit(e) {
+  e.preventDefault();
+  const email = document.getElementById("login-email").value.trim();
+  const password = document.getElementById("login-password").value;
+  const btn = document.getElementById("login-submit");
+  const err = document.getElementById("login-error");
+  err.hidden = true;
+  btn.disabled = true;
+  btn.textContent = "Accesso in corso…";
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    // signed in → onAuthStateChange farà il resto
+    _authErrorHandled = false; // resetta flag per il prossimo eventuale errore
+  } catch (e) {
+    err.textContent = "Email o password errate. Riprova.";
+    err.hidden = false;
+    console.error("Login error:", e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Accedi";
+  }
+}
+
+async function handleLogout() {
+  if (!confirm("Sicuro di voler uscire?")) return;
+  const btn = document.getElementById("btn-logout");
+  if (btn) btn.disabled = true; // evita doppio click
+  try {
+    await sbUnsubscribe();
+    const r = await sb.auth.signOut();
+    // (Fix #7) signOut può ritornare { error } invece di throware — controllo entrambi
+    if (r && r.error) throw r.error;
+    // onAuthStateChange farà vedere il login
+  } catch (e) {
+    console.error("Logout error:", e);
+    // Forzo comunque cleanup UI lato client + mostro login con avviso.
+    // Se la rete recupera, il prossimo refresh del token confermerà lo stato.
+    closeAllModalsForLogout();
+    resetUiState();
+    _booted = false;
+    _authErrorHandled = false;
+    state.items = [];
+    showLogin("Uscita non confermata dal server (rete?). Per sicurezza, ricarica con Ctrl+F5.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// (Fix #1) _booted viene settato a true SOLO dopo che boot() finisce con successo.
+// _bootInProgress evita che due SIGNED_IN ravvicinati avviino boot in parallelo.
+let _booted = false;
+let _bootInProgress = false;
+async function startApp(session) {
+  // popola email utente nella sidebar
+  const userEmailEl = document.getElementById("user-email");
+  if (userEmailEl) userEmailEl.textContent = session?.user?.email || "—";
+  hideLogin();
+  if (_booted || _bootInProgress) return;
+  _bootInProgress = true;
+  try {
+    await boot();
+    _booted = true;
+    _authErrorHandled = false; // boot ok → resetta il guard per i prossimi errori
+  } catch (e) {
+    console.error("startApp error:", e);
+    // _booted resta false → un futuro SIGNED_IN potrà riprovare
+  } finally {
+    _bootInProgress = false;
+  }
+}
 
 // Mappatura JS object ↔ riga SQL (camelCase ↔ snake_case)
 function toSupabase(item) {
@@ -46,28 +252,49 @@ function fromSupabase(row) {
 }
 
 // CRUD Supabase
+// (Fix #3 + #1) Ogni CRUD AWAIT-a handleAuthErrorIfAny — così signOut+showLogin
+// avvengono PRIMA del throw → l'utente vede il login subito, non un alert generico.
 async function sbLoadAll() {
   const { data, error } = await sb.from("scadenze").select("*");
-  if (error) { console.error("Errore load:", error); throw new Error(error.message || "sbLoadAll failed"); }
+  if (error) {
+    console.error("Errore load:", error);
+    await handleAuthErrorIfAny(error);
+    throw new Error(error.message || "sbLoadAll failed");
+  }
   return data.map(fromSupabase);
 }
 async function sbUpsert(item) {
   const { error } = await sb.from("scadenze").upsert(toSupabase(item));
-  if (error) { console.error("Errore upsert:", error); throw new Error(error.message || "Upsert failed"); }
+  if (error) {
+    console.error("Errore upsert:", error);
+    await handleAuthErrorIfAny(error);
+    throw new Error(error.message || "Upsert failed");
+  }
 }
 async function sbUpsertMany(items) {
   if (!items.length) return;
   const rows = items.map(toSupabase);
   const { error } = await sb.from("scadenze").upsert(rows);
-  if (error) { console.error("Errore upsert bulk:", error); throw new Error(error.message || "UpsertMany failed"); }
+  if (error) {
+    console.error("Errore upsert bulk:", error);
+    await handleAuthErrorIfAny(error);
+    throw new Error(error.message || "UpsertMany failed");
+  }
 }
 async function sbDelete(id) {
   const { error } = await sb.from("scadenze").delete().eq("id", id);
-  if (error) { console.error("Errore delete:", error); throw new Error(error.message || "Delete failed"); }
+  if (error) {
+    console.error("Errore delete:", error);
+    await handleAuthErrorIfAny(error);
+    throw new Error(error.message || "Delete failed");
+  }
 }
 async function sbDeleteAll() {
   const { error } = await sb.from("scadenze").delete().neq("id", "__never_match__");
-  if (error) console.error("Errore deleteAll:", error);
+  if (error) {
+    console.error("Errore deleteAll:", error);
+    await handleAuthErrorIfAny(error);
+  }
 }
 
 // Realtime: quando un altro utente modifica, aggiorno lo stato locale
@@ -307,7 +534,13 @@ function renderModules() {
   `;
   nav.querySelectorAll(".module-btn").forEach(btn => {
     btn.addEventListener("click", () => {
-      state.module = btn.dataset.module;
+      const key = btn.dataset.module;
+      // "Tutte le scadenze" → setta sempre "all"; ogni altro modulo → toggle (riclicco = rimuovi filtro)
+      if (key === "all") {
+        state.module = "all";
+      } else {
+        state.module = (state.module === key) ? "all" : key;
+      }
       if (window.innerWidth <= 900) toggleDrawer(false);
       renderAll();
     });
@@ -318,6 +551,8 @@ function renderModules() {
 function renderResponsabili() {
   const sel = document.getElementById("responsabili-select");
   if (!sel) return;
+  // (Fix #4) Se l'utente ha la dropdown aperta/focused, NON ricostruire (eventi realtime farebbero chiudere il picker)
+  if (document.activeElement === sel) return;
   const dipendenti = window.DIPENDENTI || [];
 
   // Conta non-completati per ogni dipendente nel modulo+tipo correnti.
@@ -452,10 +687,46 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// Filtri attivi: usato dal bottone "Pulisci filtri" per mostrarsi/nascondersi
+// (Fix #9) Include histPeriod per coerenza con clearAllFilters
+function hasActiveFilters() {
+  return state.module !== "all" ||
+         state.status !== "all" ||
+         state.recurFilter !== "all" ||
+         state.responsabile !== "all" ||
+         state.histPeriod !== "all" ||
+         (state.query || "").trim() !== "";
+}
+
+function renderClearFiltersBtn() {
+  const btn = document.getElementById("btn-clear-filters");
+  if (!btn) return;
+  btn.hidden = !hasActiveFilters();
+}
+
+// Reset di TUTTI i filtri (modulo + status + ricorrenza + responsabile + ricerca + periodo storico).
+// (Fix #9) Aggiunto histPeriod. NON tocca view/calYear/calMonth → l'utente resta dove sta navigando.
+function clearAllFilters() {
+  state.module = "all";
+  state.status = "all";
+  state.recurFilter = "all";
+  state.responsabile = "all";
+  state.query = "";
+  state.histPeriod = "all";
+  const search = document.getElementById("search");
+  if (search) search.value = "";
+  const respSel = document.getElementById("responsabili-select");
+  if (respSel) respSel.value = "all";
+  const histPeriod = document.getElementById("hist-period");
+  if (histPeriod) histPeriod.value = "all";
+  renderAll();
+}
+
 function renderAll() {
   renderModules();
   renderResponsabili();
   renderKpis();
+  renderClearFiltersBtn();
   if (state.view === "calendar") renderCalendar();
   else if (state.view === "history") renderHistoryView();
   else renderList();
@@ -534,7 +805,7 @@ function renderCalendar() {
 
 function openModalWithDate(iso) {
   openModal(null);
-  document.getElementById("f-date").value = iso;
+  setDateField(iso);
 }
 
 function setView(v) {
@@ -545,6 +816,10 @@ function setView(v) {
   document.querySelectorAll(".vt-btn").forEach(b => {
     b.classList.toggle("active", b.dataset.view === v);
   });
+  // (Fix #3) Anche su setView devo aggiornare KPI active state + visibilità "Pulisci filtri"
+  // (altrimenti il KPI cliccato che cambia vista lascia topbar stantia)
+  renderKpis();
+  renderClearFiltersBtn();
   if (v === "calendar") renderCalendar();
   else if (v === "history") renderHistoryView();
   else renderList();
@@ -860,7 +1135,7 @@ function openModal(item, mode, fromStorico = false) {
   document.getElementById("f-title").value = item?.title || "";
   document.getElementById("f-description").value = item?.description || "";
   document.getElementById("f-module").value = item?.module || window.MODULES[0].key;
-  document.getElementById("f-date").value = item?.date || todayISO();
+  setDateField(item?.date || todayISO());
   populateResponsabiliCheckboxes(item?.responsabili || []);
   document.getElementById("f-recur-type").value = item?.recurType || "none";
   document.getElementById("f-recur-n").value = item?.recurN || 1;
@@ -881,6 +1156,22 @@ function applyModalMode(item) {
   const fromStorico = _modalFromStorico;
 
   card.classList.toggle("read-mode", isRead);
+
+  // (NUOVO) Disabilita tutti i campi del form in read-mode: blocca anche tastiera/Tab,
+  // non solo il click come il pointer-events del CSS. In edit-mode tutto editabile.
+  // (Fix #14) Escludo #f-date dal selector generico: flatpickr lo nasconde e gestiamo
+  // l'altInput visibile separatamente sotto. Evita double-disable e possibili sync issue.
+  card.querySelectorAll(
+    ".modal-body input:not([type='hidden']):not(#f-date), .modal-body select, .modal-body textarea"
+  ).forEach(el => { el.disabled = isRead; });
+  // Flatpickr altInput è il campo visibile dell'utente: lo disabilito esplicitamente
+  if (typeof _fpDate !== "undefined" && _fpDate && _fpDate.altInput) {
+    _fpDate.altInput.disabled = isRead;
+  } else {
+    // Fallback: senza flatpickr, #f-date è il picker nativo visibile → disabilita
+    const dateEl = document.getElementById("f-date");
+    if (dateEl) dateEl.disabled = isRead;
+  }
 
   // Bottoni footer
   // Read mode: scheda di sola lettura → bottoni azione + Chiudi
@@ -1310,6 +1601,29 @@ function downloadTemplate() {
 // resetDemo rimosso: era footgun callable da console (cancellava il DB condiviso)
 
 // ---------- Wiring ----------
+// (NUOVO) Datepicker italiano gg/mm/aaaa per il campo "Data scadenza".
+// Valore interno mantenuto sempre in ISO YYYY-MM-DD per compatibilità con il resto del codice.
+let _fpDate = null;
+if (typeof flatpickr === "function") {
+  _fpDate = flatpickr("#f-date", {
+    dateFormat: "Y-m-d",      // .value resta ISO (compatibile con saveFromForm e fmtDate)
+    altInput: true,
+    altFormat: "d/m/Y",       // visibile a schermo: 06/06/2026
+    locale: (window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.it) || "default",
+    allowInput: true,         // permette anche di scrivere a mano la data
+    disableMobile: true       // usa flatpickr anche su mobile (no native picker locale-dependent)
+  });
+} else {
+  // (Fix #6) flatpickr non caricato (CDN giù, ad-blocker) → log esplicito per QA/debug.
+  // L'app funziona ancora ma il campo data tornerà al picker nativo del browser.
+  console.warn("flatpickr non disponibile: il campo data userà il picker nativo del browser (locale-dipendente)");
+}
+// Helper per impostare la data: usa l'API flatpickr se presente, fallback .value
+function setDateField(iso) {
+  if (_fpDate) _fpDate.setDate(iso || "", false);
+  else document.getElementById("f-date").value = iso || "";
+}
+
 document.getElementById("btn-add").addEventListener("click", () => openModal(null));
 document.getElementById("modal-close").addEventListener("click", closeModal);
 document.getElementById("modal-cancel").addEventListener("click", closeModal);
@@ -1356,11 +1670,13 @@ document.getElementById("modal-delete").addEventListener("click", () => {
 
 document.getElementById("search").addEventListener("input", (e) => {
   state.query = e.target.value;
+  renderClearFiltersBtn(); // ricalcola visibilità bottone "Pulisci filtri"
   if (state.view === "history") renderHistoryView();
   else renderList();
 });
 document.getElementById("hist-period").addEventListener("change", (e) => {
   state.histPeriod = e.target.value;
+  renderClearFiltersBtn(); // (Fix #9) anche histPeriod conta come filtro attivo
   if (state.view === "history") renderHistoryView();
 });
 // KPI cliccabili — unico modo per filtrare per stato (i dropdown sono stati rimossi per semplicità)
@@ -1382,6 +1698,9 @@ document.querySelectorAll(".kpi").forEach(k => {
   });
 });
 
+// Bottone "Pulisci filtri" in topbar
+document.getElementById("btn-clear-filters").addEventListener("click", clearAllFilters);
+
 document.getElementById("btn-export").addEventListener("click", exportXlsx);
 document.getElementById("btn-template").addEventListener("click", downloadTemplate);
 document.getElementById("btn-import").addEventListener("click", () => document.getElementById("file-import").click());
@@ -1399,6 +1718,22 @@ document.getElementById("responsabili-select").addEventListener("change", (e) =>
   state.responsabile = e.target.value;
   if (window.innerWidth <= 900) toggleDrawer(false);
   renderAll();
+});
+// Click sul label "👥 RESPONSABILI" apre direttamente la dropdown.
+// (Fix #5) preventDefault SOLO se showPicker effettivamente parte; se throwa, almeno focus sul select.
+document.querySelector("label[for='responsabili-select']")?.addEventListener("click", (e) => {
+  const sel = document.getElementById("responsabili-select");
+  if (!sel) return;
+  if (typeof sel.showPicker === "function") {
+    try {
+      sel.showPicker();
+      e.preventDefault(); // solo se showPicker non ha thrown
+    } catch (_) {
+      // Fallback: focus sul select così l'utente vede dove si è "atterrato"
+      sel.focus();
+    }
+  }
+  // Senza showPicker, lascio il comportamento nativo del <label for=> (focus select)
 });
 // Chiudi drawer su resize verso desktop
 window.addEventListener("resize", () => {
@@ -1434,6 +1769,9 @@ async function boot() {
     await load();
   } catch (e) {
     console.error("Errore boot:", e);
+    // (Fix #6) Detection robusta via isAuthError invece di substring fuzzy.
+    // sbLoadAll già chiama handleAuthErrorIfAny, ma ricontrollo come safety net.
+    if (await handleAuthErrorIfAny(e)) return;
     document.getElementById("rows").innerHTML =
       `<div style="padding:60px 20px;text-align:center;color:var(--red);">⚠ Errore connessione a Supabase.<br><small>${(e && e.message) || e}</small></div>`;
     return;
@@ -1441,4 +1779,36 @@ async function boot() {
   renderAll();
   sbSubscribe(); // attiva realtime: modifiche degli altri utenti compaiono in tempo reale
 }
-boot();
+
+// ---------- Wire login + auth state ----------
+document.getElementById("login-form").addEventListener("submit", handleLoginSubmit);
+document.getElementById("btn-logout").addEventListener("click", handleLogout);
+
+// Reagisce a login / logout / refresh token / sessione iniziale
+sb.auth.onAuthStateChange(async (event, session) => {
+  if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
+    if (session) startApp(session);
+    else showLogin();
+  } else if (event === "SIGNED_OUT") {
+    // (Fix #13) Await per evitare race con sbSubscribe se SIGNED_IN arriva subito dopo
+    await sbUnsubscribe();
+    // (Fix #5) Chiudi modali aperti prima che diventino orfani
+    closeAllModalsForLogout();
+    // (Fix #11) Reset filtri/ricerca tra utenti diversi (view preservata, Fix #10)
+    resetUiState();
+    _booted = false;
+    // (Fix #8) Reset del guard auth-error → il prossimo errore può ri-triggerare il flow
+    _authErrorHandled = false;
+    state.items = [];
+    showLogin();
+  } else if (event === "USER_UPDATED") {
+    // Se l'admin cambia email dell'utente, aggiorno la label in sidebar
+    const userEmailEl = document.getElementById("user-email");
+    if (userEmailEl && session?.user?.email) userEmailEl.textContent = session.user.email;
+  }
+  // TOKEN_REFRESHED: il client usa automaticamente il nuovo JWT per le query REST.
+  // Nota: per il realtime con RLS, in caso di problemi futuri valutare sb.realtime.setAuth(session.access_token).
+});
+
+// (Fix #12) Niente showLogin() unconditional qui: l'overlay parte hidden in HTML.
+// INITIAL_SESSION fire poco dopo e decide se mostrarlo (no session) o tenerlo nascosto (session esiste).
