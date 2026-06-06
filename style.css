@@ -833,12 +833,15 @@ body {
 .cal-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  grid-auto-rows: minmax(110px, 1fr);
+  /* (FIX) min 75px invece di 110px: 6 righe = 450px minimi, ci stanno anche su laptop 768px alti.
+     1fr fa comunque crescere le righe su schermi alti. */
+  grid-auto-rows: minmax(75px, 1fr);
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 0 0 12px 12px;
   overflow: hidden;
   flex: 1;
+  min-height: 0; /* permette al grid di adattarsi quando lo spazio flex e' poco */
 }
 .cal-day {
   border-right: 1px solid var(--line);
