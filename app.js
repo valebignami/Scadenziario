@@ -13,7 +13,6 @@ function toSupabase(item) {
     description: item.description || item.notes || "",
     module: item.module,
     date: item.date,
-    ref: item.ref || null,
     recur_type: item.recurType || "none",
     recur_n: (item.recurType && item.recurType !== "none") ? (item.recurN || 1) : null,
     done: !!item.done,
@@ -33,7 +32,6 @@ function fromSupabase(row) {
     description: row.description || "",
     module: row.module,
     date: row.date,
-    ref: row.ref || "",
     recurType: row.recur_type || "none",
     recurN: row.recur_n || null,
     done: !!row.done,
@@ -413,9 +411,10 @@ function visibleItems() {
     })
     .filter(it => {
       if (!q) return true;
+      const respText = (Array.isArray(it.responsabili) ? it.responsabili.join(" ") : "").toLowerCase();
       return (it.title || "").toLowerCase().includes(q)
-        || (it.ref || "").toLowerCase().includes(q)
-        || (it.description || "").toLowerCase().includes(q);
+        || (it.description || "").toLowerCase().includes(q)
+        || respText.includes(q);
     })
     .sort((a, b) => {
       if (a.done !== b.done) return a.done ? 1 : -1;
@@ -525,7 +524,7 @@ function renderCalendar() {
       const cls = `cal-event ${color}${isVirtual ? " virtual" : ""}`;
       const tip = isVirtual
         ? `${it.title} — occorrenza proiettata (prossima attiva: ${fmtDate(it.date)})`
-        : `${it.title}${it.ref ? " — " + it.ref : ""}`;
+        : `${it.title}${(Array.isArray(it.responsabili) && it.responsabili.length) ? " — " + it.responsabili.join(", ") : ""}`;
       return `<div class="${cls}" data-id="${it.id}" title="${escapeHtml(tip)}">${escapeHtml(label)}</div>`;
     }).join("");
     const more = c.events.length > MAX_EVENTS
@@ -881,7 +880,6 @@ function openModal(item, mode, fromStorico = false) {
   document.getElementById("f-description").value = item?.description || "";
   document.getElementById("f-module").value = item?.module || window.MODULES[0].key;
   document.getElementById("f-date").value = item?.date || todayISO();
-  document.getElementById("f-ref").value = item?.ref || "";
   populateResponsabiliCheckboxes(item?.responsabili || []);
   document.getElementById("f-recur-type").value = item?.recurType || "none";
   document.getElementById("f-recur-n").value = item?.recurN || 1;
@@ -946,7 +944,6 @@ async function saveFromForm(e) {
     description: document.getElementById("f-description").value.trim(),
     module: document.getElementById("f-module").value,
     date: document.getElementById("f-date").value,
-    ref: document.getElementById("f-ref").value.trim(),
     responsabili: readResponsabiliFromForm(),
     recurType: document.getElementById("f-recur-type").value,
     recurN: parseInt(document.getElementById("f-recur-n").value, 10) || 1
@@ -1007,7 +1004,6 @@ function exportXlsx() {
     "Descrizione": it.description || "",
     "Data scadenza": it.date,
     "Giorni alla scadenza": it.done ? "" : daysBetween(it.date),
-    "Riferimento": it.ref || "",
     "Responsabili": (Array.isArray(it.responsabili) ? it.responsabili : []).join(", "),
     "Ricorrenza": recurLabel(it),
     "Ultima esecuzione": it.lastDoneAt || it.doneAt || "",
@@ -1022,7 +1018,6 @@ function exportXlsx() {
     { wch: 55 }, // descrizione
     { wch: 14 }, // data
     { wch: 10 }, // giorni
-    { wch: 32 }, // riferimento
     { wch: 28 }, // responsabili
     { wch: 18 }, // ricorrenza
     { wch: 16 }, // ultima esecuzione
@@ -1188,7 +1183,6 @@ function importXlsx(file) {
           description,
           module: modKey,
           date,
-          ref: String(pick(r, "Riferimento", "riferimento", "Ref") || "").trim(),
           responsabili: String(pick(r, "Responsabili", "responsabili", "Responsabile", "responsabile") || "")
             .split(",")
             .map(s => s.trim())
@@ -1259,7 +1253,6 @@ function downloadTemplate() {
       "Descrizione": "Versamento mensile dell'acconto accise sull'energia elettrica autoconsumata. Periodo: mese solare precedente. Calcolo: (kWh totali × 28,41%) × 0,0125. Rif. Testo Unico Accise + Decreto MEF 10.03.2026.",
       "Modulo": "Fisco",
       "Data scadenza": "2026-06-30",
-      "Riferimento": "Agenzia delle Entrate / Studio commercialista",
       "Responsabili": "Marco, Valentina",
       "Ricorrenza": "ogni 1 mese",
       "Eseguito da": "",
@@ -1270,7 +1263,6 @@ function downloadTemplate() {
       "Descrizione": "Dichiarazione semestrale dei consumi di energia elettrica (periodo gennaio-giugno) all'Agenzia delle Dogane. Invio telematico tramite Portale Dogane.",
       "Modulo": "Fisco",
       "Data scadenza": "2026-09-30",
-      "Riferimento": "Agenzia delle Entrate / Studio commercialista",
       "Responsabili": "Marco, Valentina",
       "Ricorrenza": "ogni 1 anno",
       "Eseguito da": "",
@@ -1281,7 +1273,6 @@ function downloadTemplate() {
       "Descrizione": "Pagamento (o credito) della differenza tra accise dovute sul semestre e acconti versati. Calcolo: (Σ kWh × 28,41% × 0,0125 €/kWh) − Σ acconti mensili versati.",
       "Modulo": "Fisco",
       "Data scadenza": "2026-09-30",
-      "Riferimento": "Agenzia delle Entrate / Studio commercialista",
       "Responsabili": "Davide",
       "Ricorrenza": "ogni 1 anno",
       "Eseguito da": "",
@@ -1292,7 +1283,6 @@ function downloadTemplate() {
       "Descrizione": "Sorveglianza sanitaria obbligatoria art. 41 D.Lgs. 81/08 per lavoratori esposti a rischi specifici. Lavoratore: Sig. Marchetti.",
       "Modulo": "Personale",
       "Data scadenza": "15/12/2026",
-      "Riferimento": "Medico competente Dr. Galli",
       "Responsabili": "Marco, Roberto M",
       "Ricorrenza": "ogni 1 anno",
       "Eseguito da": "",
@@ -1305,7 +1295,6 @@ function downloadTemplate() {
     { wch: 70 }, // descrizione
     { wch: 20 }, // modulo
     { wch: 14 }, // data
-    { wch: 38 }, // riferimento
     { wch: 28 }, // responsabili
     { wch: 16 }, // ricorrenza
     { wch: 18 }, // eseguito da
@@ -1321,7 +1310,6 @@ function downloadTemplate() {
     ["Modulo", "consigliato",
       "uno tra: Personale | Fisco | Manutenzione | Fornitori | Clienti | Utenze (match parziale supportato)"],
     ["Data scadenza", "SÌ", "formati ammessi: 2026-09-30 (ISO), 30/09/2026, 30-09-2026, oppure data nativa Excel"],
-    ["Riferimento", "no", "testo libero: riferimento esterno (es. 'Agenzia delle Entrate', 'Studio Collarini', 'Fornitore X')"],
     ["Responsabili", "no",
       "uno o più dipendenti separati da virgola. Valori ammessi (lista corrente): " + (window.DIPENDENTI || []).join(", ") + ". Es. 'Marco' oppure 'Marco, Valentina'. Nomi sconosciuti vengono ignorati."],
     ["Ricorrenza", "no",
