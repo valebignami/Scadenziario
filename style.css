@@ -118,69 +118,22 @@ body {
   border-top: 1px solid var(--line);
   margin-top: 4px;
 }
-.sidebar-section-toggle {
-  background: none;
-  border: 0;
+.responsabili-select {
   width: 100%;
-  text-align: left;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: inherit;
-}
-.sidebar-section-toggle:hover { color: var(--ink); }
-.section-arrow {
-  display: inline-block;
-  font-size: 11px;
-  transition: transform .15s ease;
-  color: var(--ink-soft);
-  width: 10px;
-}
-.section-arrow.collapsed { transform: rotate(-90deg); }
-.responsabili[hidden] { display: none; }
-.responsabili {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex-shrink: 0; /* nel sidebar flex column non deve comprimersi */
-}
-.resp-btn {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 10px;
-  background: transparent;
-  border: 0;
-  text-align: left;
-  padding: 7px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
-  cursor: pointer;
-  color: var(--ink);
+  background: white;
   font-size: 13px;
   font-family: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  flex-shrink: 0;
 }
-.resp-btn:hover { background: var(--gray-soft); }
-.resp-btn.active {
-  background: var(--brand-soft);
-  color: var(--brand-ink);
-  font-weight: 600;
-}
-.resp-count {
-  font-size: 11px;
-  background: var(--gray-soft);
-  padding: 1px 7px;
-  border-radius: 999px;
-  color: var(--ink-soft);
-  font-weight: 600;
-}
-.resp-btn.active .resp-count {
-  background: white;
-  color: var(--brand-ink);
-}
-.resp-name-empty {
-  color: var(--ink-soft);
-  font-style: italic;
+.responsabili-select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
 }
 
 .sidebar-foot {
@@ -1079,6 +1032,53 @@ body {
   .hist-row .hist-date { grid-area: d; }
   .hist-row .hist-late { grid-area: l; justify-self: end; }
   .hist-row .hist-meta { grid-area: m; font-size: 12px; }
+
+  /* Storico globale (tab Storico) → righe come card verticali */
+  .history-wrap { padding: 12px 10px 14px; }
+  .hist-table {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    overflow: visible;
+  }
+  .hist-head { display: none; }
+  .hist-global-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "date  esito"
+      "title title"
+      "module by";
+    gap: 4px 10px;
+    background: white;
+    border: 1px solid var(--line);
+    border-top: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  .hist-global-row:first-child { border-top: 1px solid var(--line); }
+  .hist-global-row .hist-date-cell { grid-area: date; font-weight: 600; font-size: 13.5px; }
+  .hist-global-row .hist-title-cell { grid-area: title; }
+  .hist-global-row .hist-title-cell strong { font-size: 14px; }
+  .hist-global-row .hist-title-cell .hist-note {
+    display: block;
+    white-space: normal;
+    font-size: 12.5px;
+    margin-top: 2px;
+  }
+  .hist-global-row > div:nth-child(3) { grid-area: module; }
+  .hist-global-row .hist-late {
+    grid-area: esito;
+    justify-self: end;
+    font-size: 12px;
+  }
+  .hist-global-row .hist-by-cell {
+    grid-area: by;
+    justify-self: end;
+    font-size: 12.5px;
+  }
 }
 
 @keyframes sheetUp {

@@ -314,10 +314,10 @@ function renderModules() {
   });
 }
 
-// ---------- Render sidebar Responsabili (lista fissa DIPENDENTI) ----------
+// ---------- Render dropdown Responsabili (lista fissa DIPENDENTI) ----------
 function renderResponsabili() {
-  const nav = document.getElementById("responsabili");
-  if (!nav) return;
+  const sel = document.getElementById("responsabili-select");
+  if (!sel) return;
   const dipendenti = window.DIPENDENTI || [];
 
   // Conta non-completati per ogni dipendente nel modulo+tipo correnti.
@@ -341,29 +341,12 @@ function renderResponsabili() {
     }
   });
 
-  nav.innerHTML = `
-    <button class="resp-btn ${state.responsabile === "all" ? "active" : ""}" data-resp="all">
-      <span>Tutti</span>
-      <span class="resp-count">${total}</span>
-    </button>
-    ${dipendenti.map(name => `
-      <button class="resp-btn ${state.responsabile === name ? "active" : ""}" data-resp="${escapeHtml(name)}">
-        <span>${escapeHtml(name)}</span>
-        <span class="resp-count">${counts[name]}</span>
-      </button>`).join("")}
-    <button class="resp-btn ${state.responsabile === "__none__" ? "active" : ""}" data-resp="__none__">
-      <span class="resp-name-empty">— Non assegnato</span>
-      <span class="resp-count">${unassigned}</span>
-    </button>
+  sel.innerHTML = `
+    <option value="all">Tutti (${total})</option>
+    ${dipendenti.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)} (${counts[name]})</option>`).join("")}
+    <option value="__none__">— Non assegnato (${unassigned})</option>
   `;
-
-  nav.querySelectorAll(".resp-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      state.responsabile = btn.dataset.resp;
-      if (window.innerWidth <= 900) toggleDrawer(false);
-      renderAll();
-    });
-  });
+  sel.value = state.responsabile;
 }
 
 // ---------- Drawer mobile ----------
@@ -1411,24 +1394,11 @@ document.getElementById("file-import").addEventListener("change", (e) => {
 document.getElementById("hamburger").addEventListener("click", () => toggleDrawer(true));
 document.getElementById("drawer-backdrop").addEventListener("click", () => toggleDrawer(false));
 
-// Toggle sezione Responsabili (collassabile, stato in localStorage)
-const RESP_COLLAPSED_KEY = "scadenziario_responsabili_collapsed";
-function applyResponsabiliCollapsed(collapsed) {
-  const nav = document.getElementById("responsabili");
-  const arrow = document.querySelector("#responsabili-toggle .section-arrow");
-  const btn = document.getElementById("responsabili-toggle");
-  if (!nav || !arrow || !btn) return;
-  nav.hidden = collapsed;
-  arrow.classList.toggle("collapsed", collapsed);
-  btn.setAttribute("aria-expanded", String(!collapsed));
-}
-// Init dallo stato salvato
-applyResponsabiliCollapsed(localStorage.getItem(RESP_COLLAPSED_KEY) === "1");
-document.getElementById("responsabili-toggle").addEventListener("click", () => {
-  const isCollapsed = document.getElementById("responsabili").hidden;
-  const next = !isCollapsed;
-  applyResponsabiliCollapsed(next);
-  localStorage.setItem(RESP_COLLAPSED_KEY, next ? "1" : "0");
+// Dropdown Responsabili
+document.getElementById("responsabili-select").addEventListener("change", (e) => {
+  state.responsabile = e.target.value;
+  if (window.innerWidth <= 900) toggleDrawer(false);
+  renderAll();
 });
 // Chiudi drawer su resize verso desktop
 window.addEventListener("resize", () => {
