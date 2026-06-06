@@ -118,6 +118,27 @@ body {
   border-top: 1px solid var(--line);
   margin-top: 4px;
 }
+.sidebar-section-toggle {
+  background: none;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: inherit;
+}
+.sidebar-section-toggle:hover { color: var(--ink); }
+.section-arrow {
+  display: inline-block;
+  font-size: 11px;
+  transition: transform .15s ease;
+  color: var(--ink-soft);
+  width: 10px;
+}
+.section-arrow.collapsed { transform: rotate(-90deg); }
+.responsabili[hidden] { display: none; }
 .responsabili {
   display: flex;
   flex-direction: column;

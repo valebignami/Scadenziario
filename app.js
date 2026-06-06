@@ -1410,6 +1410,26 @@ document.getElementById("file-import").addEventListener("change", (e) => {
 // Drawer (sidebar mobile)
 document.getElementById("hamburger").addEventListener("click", () => toggleDrawer(true));
 document.getElementById("drawer-backdrop").addEventListener("click", () => toggleDrawer(false));
+
+// Toggle sezione Responsabili (collassabile, stato in localStorage)
+const RESP_COLLAPSED_KEY = "scadenziario_responsabili_collapsed";
+function applyResponsabiliCollapsed(collapsed) {
+  const nav = document.getElementById("responsabili");
+  const arrow = document.querySelector("#responsabili-toggle .section-arrow");
+  const btn = document.getElementById("responsabili-toggle");
+  if (!nav || !arrow || !btn) return;
+  nav.hidden = collapsed;
+  arrow.classList.toggle("collapsed", collapsed);
+  btn.setAttribute("aria-expanded", String(!collapsed));
+}
+// Init dallo stato salvato
+applyResponsabiliCollapsed(localStorage.getItem(RESP_COLLAPSED_KEY) === "1");
+document.getElementById("responsabili-toggle").addEventListener("click", () => {
+  const isCollapsed = document.getElementById("responsabili").hidden;
+  const next = !isCollapsed;
+  applyResponsabiliCollapsed(next);
+  localStorage.setItem(RESP_COLLAPSED_KEY, next ? "1" : "0");
+});
 // Chiudi drawer su resize verso desktop
 window.addEventListener("resize", () => {
   if (window.innerWidth > 900) toggleDrawer(false);
