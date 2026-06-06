@@ -321,7 +321,6 @@ function sbSubscribe() {
 }
 
 // ---------- Stato ----------
-const STORAGE_KEY = "scadenziario_v1"; // tenuto come fallback solo per migrazione localStorage → cloud
 const _now = new Date();
 const state = {
   items: [],
@@ -340,58 +339,11 @@ const MESI_IT = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
                  "Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
 
 // ---------- Boot ----------
+// Carica le scadenze dal cloud (Supabase). Se il cloud e' vuoto, l'app mostra
+// lo stato vuoto naturale; l'utente aggiungera' la prima scadenza dalla UI.
 async function load() {
-  // 1) carica da Supabase
   const cloud = await sbLoadAll();
-  if (cloud.length > 0) {
-    state.items = cloud;
-    // Anche su dati cloud esistenti applico la migrazione (chiavi modulo legacy, notes→description)
-    if (migrateModuleKeys()) {
-      await sbUpsertMany(state.items);
-      console.log(`Migrazione cloud applicata + sincronizzata.`);
-    }
-    return;
-  }
-  // 2) cloud vuoto → bootstrap. Se ho localStorage legacy lo migro, altrimenti carico il demo
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (raw) {
-    try {
-      const local = JSON.parse(raw);
-      if (Array.isArray(local) && local.length > 0) {
-        state.items = local;
-        migrateModuleKeys();
-        await sbUpsertMany(state.items);
-        console.log(`Migrazione: ${state.items.length} item da localStorage → Supabase.`);
-        localStorage.removeItem(STORAGE_KEY);
-        return;
-      }
-    } catch (e) { console.warn("Dati locali corrotti:", e); }
-  }
-  state.items = JSON.parse(JSON.stringify(window.DEMO_DATA));
-  migrateModuleKeys();
-  await sbUpsertMany(state.items);
-  console.log(`Bootstrap demo: ${state.items.length} item caricati su Supabase.`);
-}
-
-// Migra le vecchie chiavi modulo (fiscali, manutenzioni, sicurezza, hr, veicoli, documenti, utenze)
-// alle nuove (fisco, macchinari, hse, personale, ...)
-function migrateModuleKeys() {
-  const map = window.MODULE_MIGRATION || {};
-  let changed = 0;
-  state.items.forEach(it => {
-    if (map[it.module]) {
-      it.module = map[it.module];
-      changed++;
-    }
-    // Migra "notes" → "description" se quest'ultima è vuota; poi rimuove notes
-    if (it.notes) {
-      if (!it.description) it.description = it.notes;
-      delete it.notes;
-      changed++;
-    }
-  });
-  if (changed) console.log(`Migrazione dati: ${changed} modifiche applicate.`);
-  return changed > 0;
+  state.items = cloud;
 }
 
 // ---------- Helpers ----------
