@@ -515,13 +515,11 @@ function renderCalendar() {
     const eventsHtml = c.events.slice(0, MAX_EVENTS).map(ev => {
       const it = ev.it;
       const isVirtual = ev.virtual;
-      // Per le proiezioni, l'urgenza è relativa alla data proiettata; non sono "fatte"
-      const days = daysBetween(c.iso);
-      const u = urgency(days, isVirtual ? false : it.done);
-      const color = urgencyColor(u);
-      const prefix = isVirtual ? "↻ " : (it.done ? "✓ " : "");
+      const isDone = !isVirtual && it.done;
+      const prefix = isVirtual ? "↻ " : (isDone ? "✓ " : "");
       const label = prefix + it.title;
-      const cls = `cal-event ${color}${isVirtual ? " virtual" : ""}`;
+      // Colore = categoria/modulo (non più urgenza). "done" e "virtual" sono modifier visuali.
+      const cls = `cal-event ${it.module}${isDone ? " done" : ""}${isVirtual ? " virtual" : ""}`;
       const tip = isVirtual
         ? `${it.title} — occorrenza proiettata (prossima attiva: ${fmtDate(it.date)})`
         : `${it.title}${(Array.isArray(it.responsabili) && it.responsabili.length) ? " — " + it.responsabili.join(", ") : ""}`;
