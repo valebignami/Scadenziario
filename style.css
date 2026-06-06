@@ -107,6 +107,61 @@ body {
   color: var(--brand-ink);
 }
 
+.sidebar-section-title {
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 700;
+  padding: 14px 10px 6px;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+.responsabili {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.resp-btn {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+}
+.resp-btn:hover { background: var(--gray-soft); }
+.resp-btn.active {
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+.resp-count {
+  font-size: 11px;
+  background: var(--gray-soft);
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+.resp-btn.active .resp-count {
+  background: white;
+  color: var(--brand-ink);
+}
+.resp-name-empty {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
 .sidebar-foot {
   display: flex;
   flex-direction: column;

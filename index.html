@@ -26,6 +26,9 @@
       </button>
     </nav>
 
+    <div class="sidebar-section-title">👥 Responsabili</div>
+    <nav class="responsabili" id="responsabili"></nav>
+
     <div class="sidebar-foot">
       <button class="ghost-btn" id="btn-export">⬇ Export Excel</button>
       <button class="ghost-btn" id="btn-template">📄 Template Excel (per import)</button>
@@ -44,7 +47,7 @@
         <button class="vt-btn" data-view="history">📜 Storico</button>
       </div>
       <div class="search">
-        <input type="text" id="search" placeholder="🔎 Cerca scadenza, fornitore, riferimento…">
+        <input type="text" id="search" placeholder="🔎 Cerca scadenza, responsabile, descrizione…">
       </div>
       <div class="topbar-actions">
         <button class="primary-btn" id="btn-add">+ Nuova scadenza</button>
@@ -82,7 +85,7 @@
           <div class="lh module">Modulo</div>
           <div class="lh date">Data</div>
           <div class="lh days">Giorni</div>
-          <div class="lh ref">Riferimento</div>
+          <div class="lh ref">Responsabile</div>
           <div class="lh rec">Ricorrenza</div>
         </div>
         <div id="rows"></div>
@@ -173,8 +176,8 @@
       </div>
 
       <label>
-        <span>Riferimento</span>
-        <input type="text" id="f-ref" placeholder="es. fornitore, numero documento, responsabile">
+        <span>Responsabile</span>
+        <input type="text" id="f-ref" placeholder="es. Anna Rossi, M. Bianchi, Studio Collarini">
       </label>
 
       <fieldset class="recur">

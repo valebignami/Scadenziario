@@ -100,12 +100,13 @@ const state = {
   items: [],
   module: "all",
   status: "all",
-  recurFilter: "all",    // "all" | "recurring" | "oneshot"
+  recurFilter: "all",     // "all" | "recurring" | "oneshot"
+  responsabile: "all",    // "all" | "__none__" | <nome>
   query: "",
-  view: "list",          // "list" | "calendar" | "history"
+  view: "list",           // "list" | "calendar" | "history"
   calYear: _now.getFullYear(),
   calMonth: _now.getMonth(),
-  histPeriod: "all"      // "all" | "year" | "90" | "30"
+  histPeriod: "all"       // "all" | "year" | "90" | "30"
 };
 
 const MESI_IT = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
@@ -229,6 +230,12 @@ function inRecurScope(it) {
   if (state.recurFilter === "all") return true;
   return state.recurFilter === "recurring" ? isRecurring(it) : !isRecurring(it);
 }
+function inResponsabileScope(it) {
+  if (state.responsabile === "all") return true;
+  const r = (it.ref || "").trim();
+  if (state.responsabile === "__none__") return !r;
+  return r === state.responsabile;
+}
 function fmtRelativeDays(days) {
   if (days === 0) return "oggi";
   const abs = Math.abs(days);
@@ -307,6 +314,51 @@ function renderModules() {
   });
 }
 
+// ---------- Render sidebar Responsabili ----------
+function renderResponsabili() {
+  const nav = document.getElementById("responsabili");
+  if (!nav) return;
+
+  // Conta non-completati per ogni responsabile, rispettando il filtro modulo + tipo (per coerenza scope)
+  const inOtherScope = it => inModuleScope(it) && inRecurScope(it) && inResponsabileScope(it);
+  const counts = new Map();
+  let unassigned = 0;
+  state.items.forEach(it => {
+    if (!inOtherScope(it)) return;
+    if (it.done) return;
+    const r = (it.ref || "").trim();
+    if (!r) unassigned++;
+    else counts.set(r, (counts.get(r) || 0) + 1);
+  });
+  const total = Array.from(counts.values()).reduce((a, b) => a + b, 0) + unassigned;
+  const sorted = Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+  nav.innerHTML = `
+    <button class="resp-btn ${state.responsabile === "all" ? "active" : ""}" data-resp="all">
+      <span>Tutti</span>
+      <span class="resp-count">${total}</span>
+    </button>
+    ${sorted.map(([name, count]) => `
+      <button class="resp-btn ${state.responsabile === name ? "active" : ""}" data-resp="${escapeHtml(name)}">
+        <span>${escapeHtml(name)}</span>
+        <span class="resp-count">${count}</span>
+      </button>`).join("")}
+    ${unassigned > 0 ? `
+      <button class="resp-btn ${state.responsabile === "__none__" ? "active" : ""}" data-resp="__none__">
+        <span class="resp-name-empty">— Non assegnato</span>
+        <span class="resp-count">${unassigned}</span>
+      </button>` : ""}
+  `;
+
+  nav.querySelectorAll(".resp-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.responsabile = btn.dataset.resp;
+      if (window.innerWidth <= 900) toggleDrawer(false);
+      renderAll();
+    });
+  });
+}
+
 // ---------- Drawer mobile ----------
 function toggleDrawer(force) {
   const sidebar = document.getElementById("sidebar");
@@ -321,7 +373,7 @@ function toggleDrawer(force) {
 function renderKpis() {
   // Tutti i KPI (incluso "Tutte le scadenze") rispettano modulo + filtro tipo, e contano solo item attivi (non done)
   // così la matematica torna sempre: kpi-all === overdue + week + month + future
-  const scoped = state.items.filter(it => inModuleScope(it) && inRecurScope(it));
+  const scoped = state.items.filter(it => inModuleScope(it) && inRecurScope(it) && inResponsabileScope(it));
   const counts = { overdue: 0, week: 0, month: 0, future: 0, done: 0 };
   scoped.forEach(it => {
     const u = urgency(daysBetween(it.date), it.done);
@@ -344,7 +396,7 @@ function renderKpis() {
 function visibleItems() {
   const q = state.query.toLowerCase().trim();
   return state.items
-    .filter(it => inModuleScope(it) && inRecurScope(it))
+    .filter(it => inModuleScope(it) && inRecurScope(it) && inResponsabileScope(it))
     .filter(it => {
       if (state.status === "all") return true;
       const u = urgency(daysBetween(it.date), it.done);
@@ -411,6 +463,7 @@ function escapeHtml(s) {
 
 function renderAll() {
   renderModules();
+  renderResponsabili();
   renderKpis();
   if (state.view === "calendar") renderCalendar();
   else if (state.view === "history") renderHistoryView();
@@ -436,7 +489,7 @@ function renderCalendar() {
     const isToday = iso === todayISO();
     // Occorrenze "vere" (item.date === iso) e proiezioni future delle ricorrenti
     const events = state.items
-      .filter(it => inModuleScope(it) && inRecurScope(it))
+      .filter(it => inModuleScope(it) && inRecurScope(it) && inResponsabileScope(it))
       .flatMap(it => {
         if (it.date === iso) return [{ it, virtual: false }];
         if (isProjectedOccurrenceOn(it, iso)) return [{ it, virtual: true }];
@@ -524,7 +577,7 @@ function calToday() {
 // ---------- Storico globale (registro esecuzioni) ----------
 function renderHistoryView() {
   // Raccolgo tutte le esecuzioni dei item nello scope (modulo + ricorrenti/una tantum)
-  const scoped = state.items.filter(it => inModuleScope(it) && inRecurScope(it));
+  const scoped = state.items.filter(it => inModuleScope(it) && inRecurScope(it) && inResponsabileScope(it));
 
   const execs = [];
   scoped.forEach(it => {
@@ -926,7 +979,7 @@ function exportXlsx() {
     "Descrizione": it.description || "",
     "Data scadenza": it.date,
     "Giorni alla scadenza": it.done ? "" : daysBetween(it.date),
-    "Riferimento": it.ref || "",
+    "Responsabile": it.ref || "",
     "Ricorrenza": recurLabel(it),
     "Ultima esecuzione": it.lastDoneAt || it.doneAt || "",
     "Eseguito da (ultima)": it.lastDoneBy || it.doneBy || "",
@@ -1105,7 +1158,7 @@ function importXlsx(file) {
           description,
           module: modKey,
           date,
-          ref: String(pick(r, "Riferimento", "riferimento", "Ref") || "").trim(),
+          ref: String(pick(r, "Responsabile", "responsabile", "Riferimento", "riferimento", "Ref") || "").trim(),
           recurType, recurN,
           done
         };
@@ -1172,7 +1225,7 @@ function downloadTemplate() {
       "Descrizione": "Versamento mensile dell'acconto accise sull'energia elettrica autoconsumata. Periodo: mese solare precedente. Calcolo: (kWh totali × 28,41%) × 0,0125. Rif. Testo Unico Accise + Decreto MEF 10.03.2026.",
       "Modulo": "Fisco",
       "Data scadenza": "2026-06-30",
-      "Riferimento": "Agenzia delle Entrate - F24 Cod. 2806",
+      "Responsabile": "Anna Rossi (Amministrazione)",
       "Ricorrenza": "ogni 1 mese",
       "Eseguito da": "",
       "Stato": ""
@@ -1182,7 +1235,7 @@ function downloadTemplate() {
       "Descrizione": "Dichiarazione semestrale dei consumi di energia elettrica (periodo gennaio-giugno) all'Agenzia delle Dogane. Invio telematico tramite Portale Dogane.",
       "Modulo": "Fisco",
       "Data scadenza": "2026-09-30",
-      "Riferimento": "Agenzia delle Dogane (ADM) - Portale Dogane",
+      "Responsabile": "Anna Rossi (Amministrazione)",
       "Ricorrenza": "ogni 1 anno",
       "Eseguito da": "",
       "Stato": ""
@@ -1192,7 +1245,7 @@ function downloadTemplate() {
       "Descrizione": "Pagamento (o credito) della differenza tra accise dovute sul semestre e acconti versati. Calcolo: (Σ kWh × 28,41% × 0,0125 €/kWh) − Σ acconti mensili versati.",
       "Modulo": "Fisco",
       "Data scadenza": "2026-09-30",
-      "Riferimento": "Agenzia delle Entrate - F24 Cod. 2806",
+      "Responsabile": "Anna Rossi (Amministrazione)",
       "Ricorrenza": "ogni 1 anno",
       "Eseguito da": "",
       "Stato": ""
@@ -1202,7 +1255,7 @@ function downloadTemplate() {
       "Descrizione": "Sorveglianza sanitaria obbligatoria art. 41 D.Lgs. 81/08 per lavoratori esposti a rischi specifici. Lavoratore: Sig. Marchetti.",
       "Modulo": "Personale",
       "Data scadenza": "15/12/2026",
-      "Riferimento": "Medico competente Dr. Galli",
+      "Responsabile": "Marco Bianchi (HSE)",
       "Ricorrenza": "ogni 1 anno",
       "Eseguito da": "",
       "Stato": ""
@@ -1229,7 +1282,7 @@ function downloadTemplate() {
     ["Modulo", "consigliato",
       "uno tra: Personale | Fisco | Manutenzione | Fornitori | Clienti | Utenze (match parziale supportato)"],
     ["Data scadenza", "SÌ", "formati ammessi: 2026-09-30 (ISO), 30/09/2026, 30-09-2026, oppure data nativa Excel"],
-    ["Riferimento", "no", "testo: a chi/dove (es. 'Agenzia delle Entrate', 'Studio paghe ConsulPaghe')"],
+    ["Responsabile", "no", "nome del responsabile assegnato (es. 'Anna Rossi', 'M. Bianchi', 'Studio Collarini'). La sidebar 'Responsabili' filtra automaticamente per questo campo."],
     ["Ricorrenza", "no",
       "formula 'ogni N giorni|mesi|anni'. Esempi: 'ogni 1 mese', 'ogni 2 mesi', 'ogni 3 mesi', 'ogni 1 anno'. VUOTO = una tantum"],
     ["Eseguito da", "no", "testo (nome/iniziali). Si combina con 'Stato'=Completata per registrare lo storico"],
@@ -1309,6 +1362,7 @@ document.querySelectorAll(".kpi").forEach(k => {
     if (status === "all") {
       state.module = "all";
       state.status = "all";
+      state.responsabile = "all";
     } else {
       state.status = (state.status === status) ? "all" : status;
     }
@@ -1353,8 +1407,9 @@ document.addEventListener("keydown", (e) => {
 // ---------- Avvio ----------
 async function boot() {
   populateModuleSelect();
-  renderModules();  // sidebar con conteggi a 0
-  renderKpis();      // KPI a 0
+  renderModules();      // sidebar moduli con conteggi a 0
+  renderResponsabili(); // sidebar responsabili (vuota all'inizio)
+  renderKpis();         // KPI a 0
   // Mostra spinner mentre Supabase carica
   document.getElementById("rows").innerHTML =
     '<div style="padding:60px 20px;text-align:center;color:var(--ink-soft);">⏳ Caricamento da Supabase…</div>';
