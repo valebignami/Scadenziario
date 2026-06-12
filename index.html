@@ -57,8 +57,14 @@
       </button>
     </nav>
 
-    <label class="sidebar-section-title sidebar-section-label" for="responsabili-select">👥 Responsabili</label>
-    <select id="responsabili-select" class="responsabili-select"></select>
+    <div class="sidebar-section-title sidebar-section-label">👥 Responsabili</div>
+    <div class="multiselect" id="responsabili-multiselect">
+      <button type="button" class="multiselect-toggle" id="responsabili-toggle" aria-expanded="false" aria-haspopup="true">
+        <span class="multiselect-summary" id="responsabili-summary">Tutti</span>
+        <span class="multiselect-caret">▾</span>
+      </button>
+      <div class="multiselect-panel" id="responsabili-panel" hidden></div>
+    </div>
 
     <div class="sidebar-foot">
       <button class="ghost-btn" id="btn-export">⬇ Export Excel</button>

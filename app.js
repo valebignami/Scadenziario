@@ -114,10 +114,10 @@ async function sbUnsubscribe() {
 // (Fix #11) Reset filtri/ricerca tra utenti diversi.
 // (Fix #10) NON resetta state.view né calYear/calMonth → l'utente torna dove era prima del logout.
 function resetUiState() {
-  state.module = "all";
+  state.modules = [];
   state.status = "all";
   state.recurFilter = "all";
-  state.responsabile = "all";
+  state.responsabili = [];
   state.query = "";
   state.histPeriod = "all";
   // Allinea anche il DOM (input non controllati)
@@ -125,8 +125,7 @@ function resetUiState() {
   if (search) search.value = "";
   const histPeriod = document.getElementById("hist-period");
   if (histPeriod) histPeriod.value = "all";
-  const respSel = document.getElementById("responsabili-select");
-  if (respSel) respSel.value = "all";
+  closeResponsabiliPanel();
 }
 
 // (Fix #5) Chiusura modali in stato pendente al logout
@@ -324,10 +323,10 @@ function sbSubscribe() {
 const _now = new Date();
 const state = {
   items: [],
-  module: "all",
+  modules: [],            // [] = tutte; altrimenti array di module.key selezionati
   status: "all",
   recurFilter: "all",     // "all" | "recurring" | "oneshot"
-  responsabile: "all",    // "all" | "__none__" | <nome>
+  responsabili: [],       // [] = tutti; può contenere "__none__" e/o <nome>
   query: "",
   view: "list",           // "list" | "calendar" | "history"
   calYear: _now.getFullYear(),
@@ -403,17 +402,20 @@ function isRecurring(it) {
   return !!(it.recurType && it.recurType !== "none");
 }
 function inModuleScope(it) {
-  return state.module === "all" || it.module === state.module;
+  // [] = nessun filtro (tutte le categorie). Altrimenti l'item passa se è in una delle selezionate.
+  return state.modules.length === 0 || state.modules.includes(it.module);
 }
 function inRecurScope(it) {
   if (state.recurFilter === "all") return true;
   return state.recurFilter === "recurring" ? isRecurring(it) : !isRecurring(it);
 }
 function inResponsabileScope(it) {
-  if (state.responsabile === "all") return true;
+  // [] = nessun filtro (tutti). Altrimenti basta che l'item soddisfi UNA delle selezioni (OR).
+  if (state.responsabili.length === 0) return true;
   const resp = Array.isArray(it.responsabili) ? it.responsabili : [];
-  if (state.responsabile === "__none__") return resp.length === 0;
-  return resp.includes(state.responsabile);
+  return state.responsabili.some(sel =>
+    sel === "__none__" ? resp.length === 0 : resp.includes(sel)
+  );
 }
 function fmtRelativeDays(days) {
   if (days === 0) return "oggi";
@@ -471,15 +473,18 @@ function renderModules() {
   const nav = document.getElementById("modules");
   const total = state.items.filter(i => !i.done).length;
   nav.innerHTML = `
-    <button class="module-btn ${state.module === "all" ? "active" : ""}" data-module="all">
-      <span class="mod-ico">📋</span><span>Tutte le scadenze</span>
+    <button class="module-btn module-all ${state.modules.length === 0 ? "active" : ""}" data-module="all" title="Mostra tutte / azzera selezione">
+      <span class="mod-check mod-reset">✕</span>
+      <span class="mod-ico">📋</span><span class="mod-label">Tutte le scadenze</span>
       <span class="mod-count">${total}</span>
     </button>
     ${window.MODULES.map(m => {
       const count = state.items.filter(i => i.module === m.key && !i.done).length;
+      const checked = state.modules.includes(m.key);
       return `
-        <button class="module-btn ${state.module === m.key ? "active" : ""}" data-module="${m.key}">
-          <span class="mod-ico">${m.icon}</span><span>${m.label}</span>
+        <button class="module-btn ${checked ? "active" : ""}" data-module="${m.key}">
+          <input type="checkbox" class="mod-check" tabindex="-1" ${checked ? "checked" : ""}>
+          <span class="mod-ico">${m.icon}</span><span class="mod-label">${m.label}</span>
           <span class="mod-count">${count}</span>
         </button>`;
     }).join("")}
@@ -487,24 +492,54 @@ function renderModules() {
   nav.querySelectorAll(".module-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const key = btn.dataset.module;
-      // "Tutte le scadenze" → setta sempre "all"; ogni altro modulo → toggle (riclicco = rimuovi filtro)
+      // "Tutte le scadenze" → svuota la selezione (mostra tutto).
+      // Ogni altro modulo → toggle nella selezione (multiselezione, riclicco = rimuovi).
       if (key === "all") {
-        state.module = "all";
+        state.modules = [];
+      } else if (state.modules.includes(key)) {
+        state.modules = state.modules.filter(k => k !== key);
       } else {
-        state.module = (state.module === key) ? "all" : key;
+        state.modules = [...state.modules, key];
       }
-      if (window.innerWidth <= 900) toggleDrawer(false);
+      // NB: non chiudo il drawer mobile, così si possono selezionare più categorie di fila.
       renderAll();
     });
   });
 }
 
-// ---------- Render dropdown Responsabili (lista fissa DIPENDENTI) ----------
+// ---------- Avatar responsabili (iniziali + colore tenue, deterministico dal nome) ----------
+function personInitials(name) {
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0] || "?").slice(0, 1).toUpperCase();
+}
+function personColors(value) {
+  if (value === "__none__") return { bg: "#e9ebef", fg: "#6b7280" };
+  // Tinte distribuite uniformemente sul cerchio in base alla posizione in DIPENDENTI:
+  // così risultano ben distinte tra loro (non più hash → niente collisioni). Tenui.
+  const list = window.DIPENDENTI || [];
+  const idx = list.indexOf(value);
+  const total = Math.max(list.length, 1);
+  const hue = Math.round((idx >= 0 ? idx : 0) * (360 / total) + 15) % 360;
+  return { bg: `hsl(${hue} 52% 88%)`, fg: `hsl(${hue} 40% 38%)` };
+}
+function personAvatar(value, extraClass = "") {
+  const c = personColors(value);
+  const label = value === "__none__" ? "∅" : personInitials(value);
+  return `<span class="resp-av ${extraClass}" style="background:${c.bg};color:${c.fg}">${escapeHtml(label)}</span>`;
+}
+// Ordina i responsabili alfabeticamente, con "Non assegnato" sempre in fondo
+function compareResp(a, b) {
+  if (a === "__none__") return 1;
+  if (b === "__none__") return -1;
+  return String(a).localeCompare(String(b), "it");
+}
+
+// ---------- Render dropdown multiselezione Responsabili (lista fissa DIPENDENTI) ----------
 function renderResponsabili() {
-  const sel = document.getElementById("responsabili-select");
-  if (!sel) return;
-  // (Fix #4) Se l'utente ha la dropdown aperta/focused, NON ricostruire (eventi realtime farebbero chiudere il picker)
-  if (document.activeElement === sel) return;
+  const panel = document.getElementById("responsabili-panel");
+  const summary = document.getElementById("responsabili-summary");
+  if (!panel || !summary) return;
   const dipendenti = window.DIPENDENTI || [];
 
   // Conta non-completati per ogni dipendente nel modulo+tipo correnti.
@@ -512,11 +547,9 @@ function renderResponsabili() {
   const inOtherScope = it => inModuleScope(it) && inRecurScope(it);
   const counts = Object.fromEntries(dipendenti.map(n => [n, 0]));
   let unassigned = 0;
-  let total = 0;
   state.items.forEach(it => {
     if (!inOtherScope(it)) return;
     if (it.done) return;
-    total++;
     const resp = Array.isArray(it.responsabili) ? it.responsabili : [];
     if (resp.length === 0) {
       unassigned++;
@@ -528,12 +561,36 @@ function renderResponsabili() {
     }
   });
 
-  sel.innerHTML = `
-    <option value="all">Tutti (${total})</option>
-    ${dipendenti.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)} (${counts[name]})</option>`).join("")}
-    <option value="__none__">— Non assegnato (${unassigned})</option>
-  `;
-  sel.value = state.responsabile;
+  const sel = new Set(state.responsabili);
+  const ordered = [...dipendenti].sort(compareResp); // ordine alfabetico
+  const row = (value, label, count) => {
+    const on = sel.has(value);
+    return `
+      <div class="resp-opt ${on ? "on" : ""}" data-value="${escapeHtml(value)}" role="option" aria-selected="${on}">
+        ${personAvatar(value)}
+        <span class="resp-nm">${escapeHtml(label)}</span>
+        <span class="resp-ct">${count}</span>
+        <span class="resp-tick">✓</span>
+      </div>`;
+  };
+  panel.innerHTML =
+    ordered.map(name => row(name, name, counts[name])).join("") +
+    row("__none__", "Non assegnato", unassigned);
+
+  // Riepilogo sul bottone: "Tutti" se vuoto; avatar singolo + nome se uno solo;
+  // avatar impilati (max 4) + "N selezionati" se più di uno.
+  const selected = [...state.responsabili].sort(compareResp);
+  const n = selected.length;
+  if (n === 0) {
+    summary.innerHTML = `<span class="resp-summary-text">Tutti</span>`;
+  } else if (n === 1) {
+    const label = selected[0] === "__none__" ? "Non assegnato" : selected[0];
+    summary.innerHTML = `${personAvatar(selected[0])}<span class="resp-summary-text">${escapeHtml(label)}</span>`;
+  } else {
+    const avatars = selected.slice(0, 4).map(v => personAvatar(v)).join("");
+    const more = n > 4 ? `<span class="resp-more">+${n - 4}</span>` : "";
+    summary.innerHTML = `${avatars}${more}<span class="resp-summary-text">${n} selezionati</span>`;
+  }
 }
 
 // ---------- Drawer mobile ----------
@@ -573,6 +630,9 @@ function renderKpis() {
 function visibleItems() {
   const q = state.query.toLowerCase().trim();
   return state.items
+    // Le scadenze "una tantum" già fatte vivono solo nello Storico, non in lista.
+    // (Le ricorrenti non diventano mai done: avanzano alla data successiva.)
+    .filter(it => !it.done)
     .filter(it => inModuleScope(it) && inRecurScope(it) && inResponsabileScope(it))
     .filter(it => {
       if (state.status === "all") return true;
@@ -642,10 +702,10 @@ function escapeHtml(s) {
 // Filtri attivi: usato dal bottone "Pulisci filtri" per mostrarsi/nascondersi
 // (Fix #9) Include histPeriod per coerenza con clearAllFilters
 function hasActiveFilters() {
-  return state.module !== "all" ||
+  return state.modules.length > 0 ||
          state.status !== "all" ||
          state.recurFilter !== "all" ||
-         state.responsabile !== "all" ||
+         state.responsabili.length > 0 ||
          state.histPeriod !== "all" ||
          (state.query || "").trim() !== "";
 }
@@ -659,18 +719,17 @@ function renderClearFiltersBtn() {
 // Reset di TUTTI i filtri (modulo + status + ricorrenza + responsabile + ricerca + periodo storico).
 // (Fix #9) Aggiunto histPeriod. NON tocca view/calYear/calMonth → l'utente resta dove sta navigando.
 function clearAllFilters() {
-  state.module = "all";
+  state.modules = [];
   state.status = "all";
   state.recurFilter = "all";
-  state.responsabile = "all";
+  state.responsabili = [];
   state.query = "";
   state.histPeriod = "all";
   const search = document.getElementById("search");
   if (search) search.value = "";
-  const respSel = document.getElementById("responsabili-select");
-  if (respSel) respSel.value = "all";
   const histPeriod = document.getElementById("hist-period");
   if (histPeriod) histPeriod.value = "all";
+  closeResponsabiliPanel();
   renderAll();
 }
 
@@ -1136,8 +1195,10 @@ function applyModalMode(item) {
     document.getElementById("modal-done").hidden   = !isRead || isNew || isDone;
     document.getElementById("modal-reopen").hidden = !isRead || isNew || !isDone;
   }
-  document.getElementById("modal-edit").hidden     = !isRead || isNew;
-  document.getElementById("modal-delete").hidden   = !isRead || isNew;
+  // Dallo Storico la scheda è di sola consultazione: niente Modifica/Elimina.
+  // (Resta solo "Riapri" per annullare un'esecuzione registrata per errore.)
+  document.getElementById("modal-edit").hidden     = !isRead || isNew || fromStorico;
+  document.getElementById("modal-delete").hidden   = !isRead || isNew || fromStorico;
   document.getElementById("modal-close-read").hidden = !isRead;
   document.getElementById("modal-cancel").hidden   = isRead;
   document.getElementById("modal-save").hidden     = isRead;
@@ -1470,59 +1531,16 @@ function downloadTemplate() {
     alert("Libreria Excel non caricata.\nVerifica la connessione e ricarica (Ctrl+F5).");
     return;
   }
-  // Tre esempi reali: le scadenze accise energia di cui hai chiesto + un esempio generico
-  const example = [
-    {
-      "Titolo": "Accise energia - Rate di acconto mensili",
-      "Descrizione": "Versamento mensile dell'acconto accise sull'energia elettrica autoconsumata. Periodo: mese solare precedente. Calcolo: (kWh totali × 28,41%) × 0,0125. Rif. Testo Unico Accise + Decreto MEF 10.03.2026.",
-      "Modulo": "Fisco",
-      "Data scadenza": "2026-06-30",
-      "Responsabili": "Marco, Valentina",
-      "Ricorrenza": "ogni 1 mese",
-      "Eseguito da": "",
-      "Stato": ""
-    },
-    {
-      "Titolo": "Accise energia - Dichiarazione 1° semestre",
-      "Descrizione": "Dichiarazione semestrale dei consumi di energia elettrica (periodo gennaio-giugno) all'Agenzia delle Dogane. Invio telematico tramite Portale Dogane.",
-      "Modulo": "Fisco",
-      "Data scadenza": "2026-09-30",
-      "Responsabili": "Marco, Valentina",
-      "Ricorrenza": "ogni 1 anno",
-      "Eseguito da": "",
-      "Stato": ""
-    },
-    {
-      "Titolo": "Accise energia - Conguaglio 1° semestre",
-      "Descrizione": "Pagamento (o credito) della differenza tra accise dovute sul semestre e acconti versati. Calcolo: (Σ kWh × 28,41% × 0,0125 €/kWh) − Σ acconti mensili versati.",
-      "Modulo": "Fisco",
-      "Data scadenza": "2026-09-30",
-      "Responsabili": "Davide",
-      "Ricorrenza": "ogni 1 anno",
-      "Eseguito da": "",
-      "Stato": ""
-    },
-    {
-      "Titolo": "(esempio) Visita medica annuale operaio",
-      "Descrizione": "Sorveglianza sanitaria obbligatoria art. 41 D.Lgs. 81/08 per lavoratori esposti a rischi specifici. Lavoratore: Sig. Marchetti.",
-      "Modulo": "Personale",
-      "Data scadenza": "15/12/2026",
-      "Responsabili": "Marco, Roberto M",
-      "Ricorrenza": "ogni 1 anno",
-      "Eseguito da": "",
-      "Stato": ""
-    }
-  ];
-  const ws = XLSX.utils.json_to_sheet(example);
+  // Solo intestazioni: l'utente compila le righe sotto (nessun esempio precompilato).
+  const headers = ["Titolo", "Descrizione", "Modulo", "Data scadenza", "Responsabili", "Ricorrenza"];
+  const ws = XLSX.utils.aoa_to_sheet([headers]);
   ws["!cols"] = [
     { wch: 48 }, // titolo
     { wch: 70 }, // descrizione
     { wch: 20 }, // modulo
     { wch: 14 }, // data
     { wch: 28 }, // responsabili
-    { wch: 16 }, // ricorrenza
-    { wch: 18 }, // eseguito da
-    { wch: 14 }  // stato
+    { wch: 16 }  // ricorrenza
   ];
   ws["!freeze"] = { xSplit: 0, ySplit: 1 };
 
@@ -1537,9 +1555,7 @@ function downloadTemplate() {
     ["Responsabili", "no",
       "uno o più dipendenti separati da virgola. Valori ammessi (lista corrente): " + (window.DIPENDENTI || []).join(", ") + ". Es. 'Marco' oppure 'Marco, Valentina'. Nomi sconosciuti vengono ignorati."],
     ["Ricorrenza", "no",
-      "formula 'ogni N giorni|mesi|anni'. Esempi: 'ogni 1 mese', 'ogni 2 mesi', 'ogni 3 mesi', 'ogni 1 anno'. VUOTO = una tantum"],
-    ["Eseguito da", "no", "testo (nome/iniziali). Si combina con 'Stato'=Completata per registrare lo storico"],
-    ["Stato", "no", "lasciare vuoto per scadenze attive. Scrivere 'Completata' per marcarla già fatta"]
+      "formula 'ogni N giorni|mesi|anni'. Esempi: 'ogni 1 mese', 'ogni 2 mesi', 'ogni 3 mesi', 'ogni 1 anno'. VUOTO = una tantum"]
   ];
   const ws2 = XLSX.utils.aoa_to_sheet(help);
   ws2["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 90 }];
@@ -1579,8 +1595,16 @@ function setDateField(iso) {
 document.getElementById("btn-add").addEventListener("click", () => openModal(null));
 document.getElementById("modal-close").addEventListener("click", closeModal);
 document.getElementById("modal-cancel").addEventListener("click", closeModal);
+// Chiusura cliccando sul backdrop, MA solo se la pressione del mouse è iniziata sul backdrop
+// stesso. Altrimenti, selezionando testo (es. nella descrizione) e rilasciando fuori dalla
+// textarea, il browser genererebbe un click con target=#modal che chiudeva la scheda.
+let _modalMouseDownOnBackdrop = false;
+document.getElementById("modal").addEventListener("mousedown", (e) => {
+  _modalMouseDownOnBackdrop = (e.target.id === "modal");
+});
 document.getElementById("modal").addEventListener("click", (e) => {
-  if (e.target.id === "modal") closeModal();
+  if (e.target.id === "modal" && _modalMouseDownOnBackdrop) closeModal();
+  _modalMouseDownOnBackdrop = false;
 });
 document.getElementById("form").addEventListener("submit", saveFromForm);
 document.getElementById("f-recur-type").addEventListener("change", updateRecurVisibility);
@@ -1638,9 +1662,9 @@ document.querySelectorAll(".kpi").forEach(k => {
   k.addEventListener("click", () => {
     const status = k.dataset.status;
     if (status === "all") {
-      state.module = "all";
+      state.modules = [];
       state.status = "all";
-      state.responsabile = "all";
+      state.responsabili = [];
     } else {
       state.status = (state.status === status) ? "all" : status;
     }
@@ -1665,27 +1689,43 @@ document.getElementById("file-import").addEventListener("change", (e) => {
 document.getElementById("hamburger").addEventListener("click", () => toggleDrawer(true));
 document.getElementById("drawer-backdrop").addEventListener("click", () => toggleDrawer(false));
 
-// Dropdown Responsabili
-document.getElementById("responsabili-select").addEventListener("change", (e) => {
-  state.responsabile = e.target.value;
-  if (window.innerWidth <= 900) toggleDrawer(false);
-  renderAll();
-});
-// Click sul label "👥 RESPONSABILI" apre direttamente la dropdown.
-// (Fix #5) preventDefault SOLO se showPicker effettivamente parte; se throwa, almeno focus sul select.
-document.querySelector("label[for='responsabili-select']")?.addEventListener("click", (e) => {
-  const sel = document.getElementById("responsabili-select");
-  if (!sel) return;
-  if (typeof sel.showPicker === "function") {
-    try {
-      sel.showPicker();
-      e.preventDefault(); // solo se showPicker non ha thrown
-    } catch (_) {
-      // Fallback: focus sul select così l'utente vede dove si è "atterrato"
-      sel.focus();
-    }
+// Dropdown multiselezione Responsabili
+function closeResponsabiliPanel() {
+  const ms = document.getElementById("responsabili-multiselect");
+  const panel = document.getElementById("responsabili-panel");
+  const toggle = document.getElementById("responsabili-toggle");
+  if (!ms) return;
+  ms.classList.remove("open");
+  if (panel) panel.hidden = true;
+  if (toggle) toggle.setAttribute("aria-expanded", "false");
+}
+function toggleResponsabiliPanel() {
+  const ms = document.getElementById("responsabili-multiselect");
+  const panel = document.getElementById("responsabili-panel");
+  const toggle = document.getElementById("responsabili-toggle");
+  if (!ms) return;
+  const open = !ms.classList.contains("open");
+  ms.classList.toggle("open", open);
+  if (panel) panel.hidden = !open;
+  if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
+document.getElementById("responsabili-toggle").addEventListener("click", toggleResponsabiliPanel);
+// Seleziona/deseleziona un responsabile (multiselezione) cliccando la riga
+document.getElementById("responsabili-panel").addEventListener("click", (e) => {
+  const opt = e.target.closest(".resp-opt");
+  if (!opt) return;
+  const value = opt.dataset.value;
+  if (state.responsabili.includes(value)) {
+    state.responsabili = state.responsabili.filter(v => v !== value);
+  } else {
+    state.responsabili = [...state.responsabili, value];
   }
-  // Senza showPicker, lascio il comportamento nativo del <label for=> (focus select)
+  renderAll(); // ricostruisce righe + riepilogo + conteggi, lasciando il pannello aperto
+});
+// Click fuori dal dropdown → chiudi
+document.addEventListener("click", (e) => {
+  const ms = document.getElementById("responsabili-multiselect");
+  if (ms && ms.classList.contains("open") && !ms.contains(e.target)) closeResponsabiliPanel();
 });
 // Chiudi drawer su resize verso desktop
 window.addEventListener("resize", () => {
@@ -1701,12 +1741,20 @@ document.getElementById("cal-next").addEventListener("click", () => calNav(1));
 document.getElementById("cal-today").addEventListener("click", calToday);
 // btn-reset rimosso completamente (UI + funzione) per evitare cancellazioni accidentali del DB condiviso
 
+// NB: capture=true → questo handler gira PRIMA di flatpickr. Così, quando l'utente preme
+// Esc sul calendario data aperto, possiamo vederlo ancora aperto (isOpen) e NON chiudere
+// il modal: lasciamo che sia flatpickr a chiudere solo il proprio calendario.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  // Calendario data aperto → Esc chiude solo quello (lo fa flatpickr), non il modal.
+  if (_fpDate && _fpDate.isOpen) return;
+  // Dropdown multiselezione responsabili aperto → Esc chiude prima quello.
+  const respMs = document.getElementById("responsabili-multiselect");
+  if (respMs && respMs.classList.contains("open")) { closeResponsabiliPanel(); return; }
   if (!document.getElementById("done-modal").hidden) closeDoneModal();
   else if (!document.getElementById("modal").hidden) closeModal();
   else if (document.getElementById("sidebar").classList.contains("open")) toggleDrawer(false);
-});
+}, true);
 
 // ---------- Avvio ----------
 async function boot() {
