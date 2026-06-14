@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Scadenziario PMI</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20260614">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4/dist/flatpickr.min.css">
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
 <!-- flatpickr senza defer di proposito: app.js lo legge a load-time, deve essere già pronto.
@@ -331,7 +331,8 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="data.js"></script>
-<script src="app.js"></script>
+<!-- ?v=… = numero di versione: bumparlo a ogni deploy forza il browser a scaricare i file aggiornati (no cache vecchia) -->
+<script src="data.js?v=20260614"></script>
+<script src="app.js?v=20260614"></script>
 </body>
 </html>
