@@ -292,13 +292,6 @@ async function sbDelete(id) {
     throw new Error(error.message || "Delete failed");
   }
 }
-async function sbDeleteAll() {
-  const { error } = await sb.from("scadenze").delete().neq("id", "__never_match__");
-  if (error) {
-    console.error("Errore deleteAll:", error);
-    await handleAuthErrorIfAny(error);
-  }
-}
 
 // ---------- Anagrafiche (categorie + dipendenti) da Supabase ----------
 async function sbLoadCategorie() {
@@ -1466,37 +1459,6 @@ function exportXlsx() {
   }
 
   XLSX.writeFile(wb, `scadenziario-${todayISO()}.xlsx`);
-}
-function importJson(file) {
-  const reader = new FileReader();
-  reader.onload = async () => {
-    try {
-      const data = JSON.parse(reader.result);
-      if (!Array.isArray(data)) throw new Error("Formato non valido (atteso array di scadenze)");
-      // Rigenera gli ID per evitare collisioni con item esistenti
-      data.forEach(it => {
-        if (!it.id || state.items.some(x => x.id === it.id)) it.id = uid();
-        if (it.done === undefined) it.done = false;
-      });
-      const append = confirm(
-        `Trovate ${data.length} scadenze.\n\n` +
-        `OK = aggiungi alle esistenti\nAnnulla = sostituisci tutto`
-      );
-      if (append) {
-        state.items.push(...data);
-        await sbUpsertMany(data);
-      } else {
-        await sbDeleteAll();
-        state.items = data;
-        await sbUpsertMany(data);
-      }
-      renderAll();
-      alert(`Importate ${data.length} scadenze.`);
-    } catch (e) {
-      alert("File non valido: " + e.message);
-    }
-  };
-  reader.readAsText(file);
 }
 
 // --- Helpers di parsing per import Excel ---

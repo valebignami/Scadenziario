@@ -1447,7 +1447,6 @@ body {
 }
 .cfg-row.dip { grid-template-columns: 34px 1fr 30px; }
 .cfg-row.cat { grid-template-columns: 1fr 46px 46px 30px; }
-.cfg-row.deact { opacity: .5; }
 
 .cfg-av {
   width: 30px; height: 30px;
@@ -1487,19 +1486,6 @@ body {
 .cfg-icon-btn { font-size: 16px; }
 .cfg-icon-btn:hover, .cfg-color-btn:hover { border-color: var(--brand); }
 .cfg-color-btn .sw { width: 20px; height: 20px; border-radius: 6px; border: 1px solid rgba(0,0,0,.08); }
-
-/* interruttore attivo */
-.cfg-switch { position: relative; width: 40px; height: 22px; display: inline-block; }
-.cfg-switch input { display: none; }
-.cfg-switch .sl {
-  position: absolute; inset: 0; background: #cbd1da; border-radius: 999px; transition: .15s; cursor: pointer;
-}
-.cfg-switch .sl::before {
-  content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px;
-  background: #fff; border-radius: 50%; transition: .15s;
-}
-.cfg-switch input:checked + .sl { background: #22c55e; }
-.cfg-switch input:checked + .sl::before { transform: translateX(18px); }
 
 .cfg-del { border: 0; background: none; color: var(--ink-soft); cursor: pointer; font-size: 15px; }
 .cfg-del:hover { color: var(--red); }
