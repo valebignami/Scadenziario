@@ -337,6 +337,12 @@ function applyConfig(categorie, dipendenti) {
     nome: d.nome,
     attivo: d.attivo !== false
   }));
+  // (Fix #3) Ripulisce i filtri attivi da id non più esistenti (categoria/dipendente eliminati),
+  // altrimenti la lista resterebbe filtrata su qualcosa che non c'è più → appare vuota.
+  const modIds = new Set(window.MODULES.map(m => m.key));
+  state.modules = state.modules.filter(id => modIds.has(id));
+  const dipIds = new Set(window.DIPENDENTI.map(d => d.id));
+  state.responsabili = state.responsabili.filter(v => v === "__none__" || dipIds.has(v));
 }
 
 // Realtime: quando un altro utente modifica, aggiorno lo stato locale
@@ -1223,6 +1229,12 @@ let _modalMode = "edit"; // "read" | "edit"
 let _modalFromStorico = false; // true se la scheda è stata aperta cliccando una riga nello Storico
 
 function openModal(item, mode, fromStorico = false) {
+  // (Fix #6) Per creare una scadenza serve almeno una categoria: altrimenti spiego invece di
+  // aprire una scheda non salvabile.
+  if (!item && !activeModules().length) {
+    alert("Per creare una scadenza serve almeno una categoria.\nAprila da ⚙ Configurazione → Categorie.");
+    return;
+  }
   // Default: item esistente → read, nuovo → edit
   _modalMode = mode || (item ? "read" : "edit");
   _modalFromStorico = !!fromStorico;
@@ -1326,6 +1338,8 @@ async function saveFromForm(e) {
     recurN: parseInt(document.getElementById("f-recur-n").value, 10) || 1
   };
   if (data.recurType === "none") data.recurN = null;
+  // (Fix #1) Categoria valida obbligatoria: evita di salvare module = 0/NaN (violerebbe la FK).
+  if (!data.module) { alert("Seleziona una categoria valida."); return; }
 
   let saved, snapshot, idx;
   if (id) {
@@ -1499,36 +1513,24 @@ function parseImportedDate(v) {
   if (!isNaN(d)) return localISO(d);
   return null;
 }
-// Ricorrenza da due colonne: unità (Giorni/Mesi/Anni) + numero N.
-// Compatibile col vecchio formato in un'unica cella ("ogni 3 mesi").
-function parseImportedRecur(unitRaw, nRaw) {
-  const raw = String(unitRaw == null ? "" : unitRaw).trim();
-  if (!raw) return { recurType: "none", recurN: null };
-  const low = raw.toLowerCase();
-  if (low === "nessuna" || low === "no" || low === "una tantum") return { recurType: "none", recurN: null };
-  // vecchio formato unica cella: "ogni 3 mesi"
-  const m = low.match(/ogni\s+(\d+)\s+(giorn|mes|ann)/);
-  if (m) {
-    const t = m[2].startsWith("giorn") ? "day" : m[2].startsWith("mes") ? "month" : "year";
-    return { recurType: t, recurN: parseInt(m[1], 10) || 1 };
-  }
-  // nuovo formato: parola unità + numero in colonna separata
-  let type = null;
-  if (low.startsWith("giorn")) type = "day";
-  else if (low.startsWith("mes")) type = "month";
-  else if (low.startsWith("ann")) type = "year";
-  if (!type) return { recurType: "none", recurN: null, error: true };
-  const n = parseInt(nRaw, 10);
-  return { recurType: type, recurN: n > 0 ? n : 1 };
+// Ricorrenza in un'unica cella: formula "ogni N giorni|mesi|anni" (vuoto/non riconosciuto = una tantum)
+function parseImportedRecur(s) {
+  if (!s) return { recurType: "none", recurN: null };
+  const m = String(s).match(/ogni\s+(\d+)\s+(giorn|mes|ann)/i);
+  if (!m) return { recurType: "none", recurN: null };
+  const n = parseInt(m[1], 10) || 1;
+  const stem = m[2].toLowerCase();
+  const type = stem === "giorn" ? "day" : stem === "mes" ? "month" : "year";
+  return { recurType: type, recurN: n };
 }
-// Risolve un'etichetta categoria (testo dell'Excel) → ID categoria
+// Risolve un'etichetta categoria (testo dell'Excel) → ID categoria.
+// (Fix #1) Solo match ESATTO: niente match parziale (assegnava categorie sbagliate, e una
+// categoria con label vuota faceva da jolly per qualsiasi valore).
 function moduleIdByLabel(label) {
-  if (!label) return null;
-  const norm = String(label).toLowerCase().trim();
-  const exact = (window.MODULES || []).find(m => m.label.toLowerCase() === norm);
-  if (exact) return exact.key;
-  const partial = (window.MODULES || []).find(m => norm.includes(m.label.toLowerCase()));
-  return partial ? partial.key : null;
+  const norm = String(label == null ? "" : label).toLowerCase().trim();
+  if (!norm) return null;
+  const exact = (window.MODULES || []).find(m => (m.label || "").toLowerCase().trim() === norm);
+  return exact ? exact.key : null;
 }
 // Risolve un nome dipendente (testo dell'Excel) → ID dipendente (solo attivi)
 function dipendenteIdByNome(nome) {
@@ -1560,16 +1562,18 @@ function importXlsx(file) {
       const errors = [];
       rows.forEach((r, i) => {
         const title = String(pick(r, "Titolo", "titolo", "Title", "Scadenza")).trim();
-        if (!title) return;
+        if (!title) {
+          // (Fix #5) riga totalmente vuota → ignora; riga con dati ma senza titolo → errore (non sparire in silenzio)
+          const hasData = Object.values(r).some(v => String(v == null ? "" : v).trim() !== "");
+          if (hasData) errors.push(`Riga ${i + 2}: manca il Titolo (obbligatorio)`);
+          return;
+        }
         const dateRaw = pick(r, "Data scadenza", "Data", "data", "Date");
         const date = parseImportedDate(dateRaw);
         if (!date) { errors.push(`Riga ${i + 2}: data non valida (${dateRaw})`); return; }
         const modKey = moduleIdByLabel(pick(r, "Modulo", "modulo", "Module"));
         if (!modKey) { errors.push(`Riga ${i + 2}: categoria mancante o non riconosciuta`); return; }
-        const recRaw = pick(r, "Ricorrenza", "ricorrenza");
-        const rec = parseImportedRecur(recRaw, pick(r, "Ogni (numero)", "Ogni", "ogni", "Ogni N"));
-        if (rec.error) { errors.push(`Riga ${i + 2}: ricorrenza "${recRaw}" non valida (usa Giorni, Mesi o Anni, oppure lascia vuoto)`); return; }
-        const { recurType, recurN } = rec;
+        const { recurType, recurN } = parseImportedRecur(pick(r, "Ricorrenza", "ricorrenza"));
         const stato = String(pick(r, "Stato", "stato")).toLowerCase().trim();
         const done = stato === "completata" || stato === "fatta" || stato === "done";
         // "Note" è accettato come fallback per importare vecchi file
@@ -1639,7 +1643,7 @@ function downloadTemplate() {
     return;
   }
   // Solo intestazioni: l'utente compila le righe sotto (nessun esempio precompilato).
-  const headers = ["Titolo", "Descrizione", "Modulo", "Data scadenza", "Responsabili", "Ricorrenza", "Ogni (numero)"];
+  const headers = ["Titolo", "Descrizione", "Modulo", "Data scadenza", "Responsabili", "Ricorrenza"];
   const ws = XLSX.utils.aoa_to_sheet([headers]);
   ws["!cols"] = [
     { wch: 48 }, // titolo
@@ -1647,8 +1651,7 @@ function downloadTemplate() {
     { wch: 20 }, // modulo
     { wch: 14 }, // data
     { wch: 28 }, // responsabili
-    { wch: 14 }, // ricorrenza (Giorni/Mesi/Anni)
-    { wch: 14 }  // ogni (numero)
+    { wch: 16 }  // ricorrenza
   ];
   ws["!freeze"] = { xSplit: 0, ySplit: 1 };
 
@@ -1656,15 +1659,14 @@ function downloadTemplate() {
   // Solo le colonne che vanno scritte in un formato preciso (Titolo/Descrizione sono testo libero, ovvi).
   const help = [
     ["COLONNA", "OBBLIGATORIA", "FORMATO / VALORI AMMESSI"],
-    ["Modulo", "SÌ",
-      "una categoria esistente, tra: " + (window.MODULES || []).map(m => m.label).join(" | ") + ". Se anche una sola riga ha la categoria sbagliata o mancante, l'import si blocca e ti segnala le righe da correggere (non viene importato nulla)."],
-    ["Data scadenza", "SÌ", "formati ammessi: 2026-09-30 (ISO), 30/09/2026, 30-09-2026, oppure data nativa Excel"],
+    ["Titolo", "SÌ", ""],
+    ["Descrizione", "no", ""],
+    ["Modulo", "SÌ", "uno tra: " + (window.MODULES || []).map(m => m.label).join(" | ")],
+    ["Data scadenza", "SÌ", "30/09/2026 (oppure una data nativa Excel)"],
     ["Responsabili", "no",
       "uno o più dipendenti separati da virgola. Valori ammessi (lista corrente): " + activeDipendenti().map(d => d.nome).join(", ") + ". Es. 'Marco' oppure 'Marco, Valentina'. Nomi sconosciuti vengono ignorati."],
     ["Ricorrenza", "no",
-      "vuoto = una tantum; oppure scrivi: Giorni | Mesi | Anni"],
-    ["Ogni (numero)", "no",
-      "il numero N della ricorrenza: 1 = ogni mese/anno, 3 = ogni 3 mesi. Lascia vuoto se Ricorrenza è vuota"]
+      "formula 'ogni N giorni|mesi|anni'. Esempi: 'ogni 1 mese', 'ogni 2 mesi', 'ogni 3 mesi', 'ogni 1 anno'. VUOTO = una tantum"]
   ];
   const ws2 = XLSX.utils.aoa_to_sheet(help);
   ws2["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 90 }];
@@ -1898,7 +1900,12 @@ function closeConfig() {
   closeCfgDialog();
 }
 function renderConfig() {
-  if (document.getElementById("config-modal").hidden) return;
+  const modal = document.getElementById("config-modal");
+  if (modal.hidden) return;
+  // (Fix #4) Non ricostruire mentre l'utente sta scrivendo in un campo del pannello:
+  // un re-render (anche da realtime) gli farebbe perdere focus e testo non salvato.
+  const ae = document.activeElement;
+  if (ae && modal.contains(ae) && (ae.tagName === "INPUT" || ae.tagName === "SELECT")) return;
   renderCfgDip();
   renderCfgCat();
 }
@@ -2051,7 +2058,12 @@ document.querySelectorAll(".config-tab").forEach(t => t.addEventListener("click"
 // Dipendenti: rename (change), avatar live (input), toggle attivo, elimina
 document.getElementById("config-body-dip").addEventListener("change", async (e) => {
   const nm = e.target.closest("input[data-dip-name]");
-  if (nm) { try { await sbUpdateDipendente(Number(nm.dataset.dipName), { nome: nm.value.trim() }); await reloadConfig(); } catch (err) { alert("Errore: " + err.message); } return; }
+  if (nm) {
+    const val = nm.value.trim();
+    if (!val) { renderConfig(); return; } // (Fix #2) niente nome vuoto: ripristina
+    try { await sbUpdateDipendente(Number(nm.dataset.dipName), { nome: val }); await reloadConfig(); } catch (err) { alert("Errore: " + err.message); }
+    return;
+  }
 });
 document.getElementById("config-body-dip").addEventListener("input", (e) => {
   const nm = e.target.closest("input[data-dip-name]");
@@ -2073,7 +2085,12 @@ document.getElementById("cfg-add-dip").addEventListener("click", async () => {
 // Categorie: rename (change), toggle attivo, icona, colore, elimina
 document.getElementById("config-body-cat").addEventListener("change", async (e) => {
   const nm = e.target.closest("input[data-cat-name]");
-  if (nm) { try { await sbUpdateCategoria(Number(nm.dataset.catName), { label: nm.value.trim() }); await reloadConfig(); } catch (err) { alert("Errore: " + err.message); } return; }
+  if (nm) {
+    const val = nm.value.trim();
+    if (!val) { renderConfig(); return; } // (Fix #2) niente nome vuoto: ripristina
+    try { await sbUpdateCategoria(Number(nm.dataset.catName), { label: val }); await reloadConfig(); } catch (err) { alert("Errore: " + err.message); }
+    return;
+  }
 });
 document.getElementById("config-body-cat").addEventListener("click", (e) => {
   const ib = e.target.closest("[data-cat-icon]");
@@ -2087,10 +2104,10 @@ document.getElementById("cfg-add-cat").addEventListener("click", async () => {
   try {
     const used = new Set((window.MODULES || []).map(m => m.bg));
     const free = CFG_PALETTE.find(p => !used.has(p.bg)) || CFG_PALETTE[0];
-    await sbInsertCategoria({ label: "", icon: "📋", colore_bg: free.bg, colore_testo: free.fg, ordine: (window.MODULES || []).length + 1 });
+    await sbInsertCategoria({ label: "Nuova categoria", icon: "📋", colore_bg: free.bg, colore_testo: free.fg, ordine: (window.MODULES || []).length + 1 });
     await reloadConfig();
     const inputs = document.querySelectorAll("#cfg-cat-rows input[data-cat-name]");
-    if (inputs.length) inputs[inputs.length - 1].focus();
+    if (inputs.length) { const last = inputs[inputs.length - 1]; last.focus(); last.select(); }
   } catch (err) { alert("Errore: " + err.message); }
 });
 
@@ -2142,7 +2159,9 @@ document.getElementById("cfg-dialog-modal").addEventListener("click", async (e) 
     closeCfgDialog();
     await reloadAllData(); // ricarico anche le scadenze (sono cambiate)
   } catch (err) {
-    alert("Errore: " + err.message);
+    // (Fix #7) L'operazione può essere rimasta a metà (es. scadenze spostate ma categoria non eliminata).
+    alert("Operazione non completata del tutto: " + err.message +
+      "\nAlcune modifiche potrebbero essere già state applicate — ricontrolla l'elenco.");
     closeCfgDialog();
     try { await reloadAllData(); } catch (_) {}
   }
