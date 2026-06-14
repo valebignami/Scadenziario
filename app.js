@@ -1269,9 +1269,19 @@ function applyModalMode(item) {
   // non solo il click come il pointer-events del CSS. In edit-mode tutto editabile.
   // (Fix #14) Escludo #f-date dal selector generico: flatpickr lo nasconde e gestiamo
   // l'altInput visibile separatamente sotto. Evita double-disable e possibili sync issue.
-  card.querySelectorAll(
-    ".modal-body input:not([type='hidden']):not(#f-date), .modal-body select, .modal-body textarea"
-  ).forEach(el => { el.disabled = isRead; });
+  // Campi di testo (input testo + textarea): in lettura uso READONLY, non disabled,
+  // così restano non modificabili MA scrollabili e selezionabili (es. descrizione lunga).
+  card.querySelectorAll(".modal-body input:not([type='hidden']):not(#f-date), .modal-body textarea")
+    .forEach(el => {
+      if (el.type === "checkbox" || el.type === "radio") {
+        el.disabled = isRead;   // i checkbox non hanno readonly → disabled
+      } else {
+        el.readOnly = isRead;
+        el.disabled = false;
+      }
+    });
+  // I <select> non hanno readonly: in lettura restano disabled.
+  card.querySelectorAll(".modal-body select").forEach(el => { el.disabled = isRead; });
   // Flatpickr altInput è il campo visibile dell'utente: lo disabilito esplicitamente
   if (typeof _fpDate !== "undefined" && _fpDate && _fpDate.altInput) {
     _fpDate.altInput.disabled = isRead;

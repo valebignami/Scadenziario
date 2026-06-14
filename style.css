@@ -561,9 +561,15 @@ body {
   color: var(--ink);
   border-color: var(--line);
   cursor: default;
-  pointer-events: none;
+  /* NB: niente pointer-events:none → la textarea descrizione resta scrollabile/selezionabile
+     in lettura. La non-modificabilità è garantita da readonly (testo) e disabled (select/checkbox). */
   opacity: 1; /* sovrascrive il default browser su disabled */
   -webkit-text-fill-color: var(--ink); /* Safari fix per input disabled */
+}
+/* La descrizione in lettura deve poter scrollare e selezionare il testo */
+.modal-card.read-mode .modal-body textarea {
+  pointer-events: auto;
+  cursor: text;
 }
 .modal-card.read-mode .modal-body input:focus,
 .modal-card.read-mode .modal-body select:focus,
