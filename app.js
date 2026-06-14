@@ -1499,14 +1499,27 @@ function parseImportedDate(v) {
   if (!isNaN(d)) return localISO(d);
   return null;
 }
-function parseImportedRecur(s) {
-  if (!s) return { recurType: "none", recurN: null };
-  const m = String(s).match(/ogni\s+(\d+)\s+(giorn|mes|ann)/i);
-  if (!m) return { recurType: "none", recurN: null };
-  const n = parseInt(m[1], 10) || 1;
-  const stem = m[2].toLowerCase();
-  const type = stem === "giorn" ? "day" : stem === "mes" ? "month" : "year";
-  return { recurType: type, recurN: n };
+// Ricorrenza da due colonne: unità (Giorni/Mesi/Anni) + numero N.
+// Compatibile col vecchio formato in un'unica cella ("ogni 3 mesi").
+function parseImportedRecur(unitRaw, nRaw) {
+  const raw = String(unitRaw == null ? "" : unitRaw).trim();
+  if (!raw) return { recurType: "none", recurN: null };
+  const low = raw.toLowerCase();
+  if (low === "nessuna" || low === "no" || low === "una tantum") return { recurType: "none", recurN: null };
+  // vecchio formato unica cella: "ogni 3 mesi"
+  const m = low.match(/ogni\s+(\d+)\s+(giorn|mes|ann)/);
+  if (m) {
+    const t = m[2].startsWith("giorn") ? "day" : m[2].startsWith("mes") ? "month" : "year";
+    return { recurType: t, recurN: parseInt(m[1], 10) || 1 };
+  }
+  // nuovo formato: parola unità + numero in colonna separata
+  let type = null;
+  if (low.startsWith("giorn")) type = "day";
+  else if (low.startsWith("mes")) type = "month";
+  else if (low.startsWith("ann")) type = "year";
+  if (!type) return { recurType: "none", recurN: null, error: true };
+  const n = parseInt(nRaw, 10);
+  return { recurType: type, recurN: n > 0 ? n : 1 };
 }
 // Risolve un'etichetta categoria (testo dell'Excel) → ID categoria
 function moduleIdByLabel(label) {
@@ -1551,9 +1564,12 @@ function importXlsx(file) {
         const dateRaw = pick(r, "Data scadenza", "Data", "data", "Date");
         const date = parseImportedDate(dateRaw);
         if (!date) { errors.push(`Riga ${i + 2}: data non valida (${dateRaw})`); return; }
-        const modKey = moduleIdByLabel(pick(r, "Modulo", "modulo", "Module"))
-          || (activeModules()[0] && activeModules()[0].key) || null;
-        const { recurType, recurN } = parseImportedRecur(pick(r, "Ricorrenza", "ricorrenza"));
+        const modKey = moduleIdByLabel(pick(r, "Modulo", "modulo", "Module"));
+        if (!modKey) { errors.push(`Riga ${i + 2}: categoria mancante o non riconosciuta`); return; }
+        const recRaw = pick(r, "Ricorrenza", "ricorrenza");
+        const rec = parseImportedRecur(recRaw, pick(r, "Ogni (numero)", "Ogni", "ogni", "Ogni N"));
+        if (rec.error) { errors.push(`Riga ${i + 2}: ricorrenza "${recRaw}" non valida (usa Giorni, Mesi o Anni, oppure lascia vuoto)`); return; }
+        const { recurType, recurN } = rec;
         const stato = String(pick(r, "Stato", "stato")).toLowerCase().trim();
         const done = stato === "completata" || stato === "fatta" || stato === "done";
         // "Note" è accettato come fallback per importare vecchi file
@@ -1580,36 +1596,28 @@ function importXlsx(file) {
         items.push(item);
       });
 
-      if (!items.length) {
-        let msg = "Nessuna scadenza valida trovata nel file.";
-        if (errors.length) msg += "\n\nErrori:\n" + errors.slice(0, 5).join("\n");
-        alert(msg);
+      // TUTTO-O-NIENTE: se c'è anche un solo errore, non importo nulla.
+      // Così l'utente corregge e reimporta l'intero file senza rischio di duplicati.
+      if (errors.length) {
+        alert(
+          `Import annullato: ${errors.length} righe contengono errori, quindi NON è stata importata nessuna scadenza.\n\n` +
+          `Correggi queste righe e reimporta il file:\n\n` +
+          errors.slice(0, 12).join("\n") +
+          (errors.length > 12 ? `\n…e altre ${errors.length - 12}.` : "")
+        );
         return;
       }
-      // Step 1: conferma intento di importare. ✕/Esc qui = annulla, NON sostituisce.
-      if (!confirm(
-        `Trovate ${items.length} scadenze${errors.length ? ` (${errors.length} righe scartate)` : ""}.\n\n` +
-        `Vuoi importarle?`
-      )) return;
-      // Step 2: modalità import. Default = aggiungi (sicuro). Sostituisci richiede OK esplicito.
-      const replaceAll = confirm(
-        `🚨 ATTENZIONE — Premi OK SOLO se vuoi CANCELLARE tutti i dati esistenti e sostituirli con quelli del file.\n\n` +
-        `Per aggiungere alle esistenti (operazione sicura), premi ANNULLA.`
-      );
-      if (replaceAll) {
-        // Step 3: doppia conferma per operazione distruttiva
-        if (!confirm("Ultima conferma: stai per CANCELLARE TUTTI i dati attuali (anche dei colleghi). Continuare?")) return;
-        await sbDeleteAll();
-        state.items = items;
-        await sbUpsertMany(items);
-      } else {
-        state.items.push(...items);
-        await sbUpsertMany(items);
+      if (!items.length) {
+        alert("Nessuna scadenza trovata nel file.");
+        return;
       }
+      if (!confirm(
+        `Importare ${items.length} scadenze?\n\nVerranno aggiunte a quelle esistenti.`
+      )) return;
+      state.items.push(...items);
+      await sbUpsertMany(items);
       renderAll();
-      let done = `Importate ${items.length} scadenze.`;
-      if (errors.length) done += `\n\n${errors.length} righe scartate:\n` + errors.slice(0, 5).join("\n");
-      alert(done);
+      alert(`Importate ${items.length} scadenze.`);
     } catch (err) {
       console.error(err);
       alert("Errore lettura file Excel: " + err.message);
@@ -1631,7 +1639,7 @@ function downloadTemplate() {
     return;
   }
   // Solo intestazioni: l'utente compila le righe sotto (nessun esempio precompilato).
-  const headers = ["Titolo", "Descrizione", "Modulo", "Data scadenza", "Responsabili", "Ricorrenza"];
+  const headers = ["Titolo", "Descrizione", "Modulo", "Data scadenza", "Responsabili", "Ricorrenza", "Ogni (numero)"];
   const ws = XLSX.utils.aoa_to_sheet([headers]);
   ws["!cols"] = [
     { wch: 48 }, // titolo
@@ -1639,22 +1647,24 @@ function downloadTemplate() {
     { wch: 20 }, // modulo
     { wch: 14 }, // data
     { wch: 28 }, // responsabili
-    { wch: 16 }  // ricorrenza
+    { wch: 14 }, // ricorrenza (Giorni/Mesi/Anni)
+    { wch: 14 }  // ogni (numero)
   ];
   ws["!freeze"] = { xSplit: 0, ySplit: 1 };
 
   // Foglio "Istruzioni"
+  // Solo le colonne che vanno scritte in un formato preciso (Titolo/Descrizione sono testo libero, ovvi).
   const help = [
     ["COLONNA", "OBBLIGATORIA", "FORMATO / VALORI AMMESSI"],
-    ["Titolo", "SÌ", "testo libero breve (es. 'Versamento F24 mensile')"],
-    ["Descrizione", "no", "testo libero (anche lungo, multi-riga): cosa è, come si calcola, riferimenti normativi, dettagli. Mostrata sotto al titolo nella lista come anteprima e per esteso nella scheda completa."],
-    ["Modulo", "consigliato",
-      "uno tra: Personale | Fisco | Manutenzione | Fornitori | Clienti | Utenze (match parziale supportato)"],
+    ["Modulo", "SÌ",
+      "una categoria esistente, tra: " + (window.MODULES || []).map(m => m.label).join(" | ") + ". Se anche una sola riga ha la categoria sbagliata o mancante, l'import si blocca e ti segnala le righe da correggere (non viene importato nulla)."],
     ["Data scadenza", "SÌ", "formati ammessi: 2026-09-30 (ISO), 30/09/2026, 30-09-2026, oppure data nativa Excel"],
     ["Responsabili", "no",
       "uno o più dipendenti separati da virgola. Valori ammessi (lista corrente): " + activeDipendenti().map(d => d.nome).join(", ") + ". Es. 'Marco' oppure 'Marco, Valentina'. Nomi sconosciuti vengono ignorati."],
     ["Ricorrenza", "no",
-      "formula 'ogni N giorni|mesi|anni'. Esempi: 'ogni 1 mese', 'ogni 2 mesi', 'ogni 3 mesi', 'ogni 1 anno'. VUOTO = una tantum"]
+      "vuoto = una tantum; oppure scrivi: Giorni | Mesi | Anni"],
+    ["Ogni (numero)", "no",
+      "il numero N della ricorrenza: 1 = ogni mese/anno, 3 = ogni 3 mesi. Lascia vuoto se Ricorrenza è vuota"]
   ];
   const ws2 = XLSX.utils.aoa_to_sheet(help);
   ws2["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 90 }];
