@@ -1,18 +1,11 @@
 // Configurazione "statica" dello Scadenziario PMI.
-// Tutto il resto (scadenze, storico, responsabili per scadenza) e' su Supabase.
-
-// Lista dipendenti — modificabile facilmente: aggiungi/rimuovi un nome e poi commit/push.
-// Tutti vedranno la nuova lista entro 1-2 minuti.
-// NOTA: in roadmap → spostare su tabella Supabase 'dipendenti' per gestione da UI.
-window.DIPENDENTI = ["Marco", "Davide", "Roberto M", "Roberto L", "Elisa", "Valentina"];
-
-// I 6 moduli/categorie dello scadenziario. Ogni scadenza appartiene a uno solo.
-// "key" e' la chiave interna (no spazi), "label" e' cio' che vede l'utente.
-window.MODULES = [
-  { key: "personale",    label: "Personale",    short: "Personale",    icon: "👥" },
-  { key: "fisco",        label: "Fisco",        short: "Fisco",        icon: "⚖️" },
-  { key: "manutenzione", label: "Manutenzione", short: "Manutenzione", icon: "🔧" },
-  { key: "fornitori",    label: "Fornitori",    short: "Fornitori",    icon: "🤝" },
-  { key: "clienti",      label: "Clienti",      short: "Clienti",      icon: "📦" },
-  { key: "utenze",       label: "Utenze",       short: "Utenze",       icon: "⚡" }
-];
+//
+// NOTA: da giugno 2026 dipendenti e categorie NON stanno più qui, ma in due
+// tabelle Supabase ('dipendenti' e 'categorie'), caricate all'avvio da app.js
+// (vedi sbLoadDipendenti / sbLoadCategorie / applyConfig).
+//
+// Questi due array restano solo come fallback vuoto: vengono SOVRASCRITTI
+// dal caricamento da Supabase. Non modificarli a mano per cambiare l'anagrafica:
+// le modifiche si fanno sulle tabelle Supabase.
+window.DIPENDENTI = [];
+window.MODULES = [];

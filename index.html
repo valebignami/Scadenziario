@@ -67,6 +67,7 @@
     </div>
 
     <div class="sidebar-foot">
+      <button class="ghost-btn" id="btn-config">⚙ Configurazione</button>
       <button class="ghost-btn" id="btn-export">⬇ Export Excel</button>
       <button class="ghost-btn" id="btn-template">📄 Template Excel (per import)</button>
       <button class="ghost-btn" id="btn-import">⬆ Import Excel</button>
@@ -170,15 +171,7 @@
         <h2 id="cal-title">—</h2>
         <button class="icon-btn cal-nav" id="cal-next" title="Mese successivo">›</button>
         <button class="ghost-btn" id="cal-today">Oggi</button>
-        <div class="cal-legend">
-          <span class="leg"><i class="leg-chip personale"></i>Personale</span>
-          <span class="leg"><i class="leg-chip fisco"></i>Fisco</span>
-          <span class="leg"><i class="leg-chip manutenzione"></i>Manutenzione</span>
-          <span class="leg"><i class="leg-chip fornitori"></i>Fornitori</span>
-          <span class="leg"><i class="leg-chip clienti"></i>Clienti</span>
-          <span class="leg"><i class="leg-chip utenze"></i>Utenze</span>
-          <span class="leg">↻<i style="opacity:.55;font-style:italic"> proiezione</i></span>
-        </div>
+        <div class="cal-legend" id="cal-legend"></div>
       </div>
       <div class="cal-weekdays">
         <div>Lun</div><div>Mar</div><div>Mer</div><div>Gio</div><div>Ven</div><div>Sab</div><div>Dom</div>
@@ -287,6 +280,53 @@
         <button type="submit" class="primary-btn">✓ Conferma esecuzione</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- ===== Modale Configurazione (anagrafiche) ===== -->
+<div id="config-modal" class="modal" hidden>
+  <div class="modal-card config-card">
+    <div class="modal-head">
+      <h2>⚙ Configurazione</h2>
+      <button class="icon-btn" id="config-close">✕</button>
+    </div>
+    <div class="config-tabs">
+      <button type="button" class="config-tab active" data-cfgtab="dip">👥 Dipendenti</button>
+      <button type="button" class="config-tab" data-cfgtab="cat">🗂️ Categorie</button>
+    </div>
+
+    <div class="config-body" id="config-body-dip">
+      <div class="cfg-row dip cfg-head"><span></span><span>Nome</span><span></span></div>
+      <div id="cfg-dip-rows"></div>
+      <div class="cfg-add-wrap"><button type="button" class="cfg-add-btn" id="cfg-add-dip">➕ Aggiungi dipendente</button></div>
+      <p class="cfg-note">🗑️ Elimina un dipendente. Se ha scadenze collegate, scegli se <strong>spostarle su un altro</strong> o <strong>togliere solo lui</strong> — le scadenze condivise restano agli altri responsabili, quelle solo sue diventano «non assegnate».</p>
+    </div>
+
+    <div class="config-body" id="config-body-cat" hidden>
+      <div class="cfg-row cat cfg-head"><span>Categoria</span><span>Icona</span><span>Colore</span><span></span></div>
+      <div id="cfg-cat-rows"></div>
+      <div class="cfg-add-wrap"><button type="button" class="cfg-add-btn" id="cfg-add-cat">➕ Aggiungi categoria</button></div>
+      <p class="cfg-note">🗑️ Elimina una categoria. Se ha scadenze collegate, prima scegli <strong>in quale altra spostarle</strong>. Nome, icona e colore si cambiano quando vuoi.</p>
+    </div>
+  </div>
+</div>
+
+<!-- popover scelta icona -->
+<div class="cfg-pop" id="cfg-emoji-pop" hidden>
+  <p class="cfg-pop-title">Scegli un'icona</p>
+  <div class="cfg-emoji-grid" id="cfg-emoji-grid"></div>
+</div>
+<!-- popover scelta colore -->
+<div class="cfg-pop" id="cfg-color-pop" hidden>
+  <p class="cfg-pop-title">Scegli un colore</p>
+  <div class="cfg-color-grid" id="cfg-color-grid"></div>
+  <div class="cfg-color-legend"><span class="cfg-dot"></span> già usato da un'altra categoria</div>
+</div>
+
+<!-- dialog conferma eliminazione / riassegnazione -->
+<div id="cfg-dialog-modal" class="modal" hidden>
+  <div class="modal-card small">
+    <div id="cfg-dialog-body"></div>
   </div>
 </div>
 

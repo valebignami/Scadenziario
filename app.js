@@ -109,6 +109,10 @@ async function sbUnsubscribe() {
     try { await sb.removeChannel(_sbChannel); } catch (_) {}
     _sbChannel = null;
   }
+  if (_sbConfigChannel) {
+    try { await sb.removeChannel(_sbConfigChannel); } catch (_) {}
+    _sbConfigChannel = null;
+  }
 }
 
 // (Fix #11) Reset filtri/ricerca tra utenti diversi.
@@ -235,7 +239,7 @@ function fromSupabase(row) {
     id: row.id,
     title: row.title,
     description: row.description || "",
-    module: row.module,
+    module: row.module == null ? null : Number(row.module),         // ID categoria numerico
     date: row.date,
     recurType: row.recur_type || "none",
     recurN: row.recur_n || null,
@@ -246,7 +250,7 @@ function fromSupabase(row) {
     lastDoneBy: row.last_done_by || null,
     previousDate: row.previous_date || null,
     history: Array.isArray(row.history) ? row.history : [],
-    responsabili: Array.isArray(row.responsabili) ? row.responsabili : []
+    responsabili: (Array.isArray(row.responsabili) ? row.responsabili : []).map(Number) // ID dipendenti numerici
   };
 }
 
@@ -296,8 +300,48 @@ async function sbDeleteAll() {
   }
 }
 
+// ---------- Anagrafiche (categorie + dipendenti) da Supabase ----------
+async function sbLoadCategorie() {
+  const { data, error } = await sb.from("categorie").select("*").order("ordine", { ascending: true });
+  if (error) {
+    console.error("Errore load categorie:", error);
+    await handleAuthErrorIfAny(error);
+    throw new Error(error.message || "sbLoadCategorie failed");
+  }
+  return data;
+}
+async function sbLoadDipendenti() {
+  const { data, error } = await sb.from("dipendenti").select("*").order("ordine", { ascending: true });
+  if (error) {
+    console.error("Errore load dipendenti:", error);
+    await handleAuthErrorIfAny(error);
+    throw new Error(error.message || "sbLoadDipendenti failed");
+  }
+  return data;
+}
+// Riversa le righe Supabase nelle liste in memoria usate da tutta l'app.
+// MODULES: key = id categoria (numero); porta anche colori (bg/fg) come dato.
+// DIPENDENTI: oggetti { id, nome, attivo }.
+function applyConfig(categorie, dipendenti) {
+  window.MODULES = (categorie || []).map(c => ({
+    key: Number(c.id),     // ID sempre numerico (Supabase può restituire bigint come stringa)
+    label: c.label,
+    short: c.label,
+    icon: c.icon || "•",
+    bg: c.colore_bg || "#eef0f4",
+    fg: c.colore_testo || "#333a45",
+    attivo: c.attivo !== false
+  }));
+  window.DIPENDENTI = (dipendenti || []).map(d => ({
+    id: Number(d.id),
+    nome: d.nome,
+    attivo: d.attivo !== false
+  }));
+}
+
 // Realtime: quando un altro utente modifica, aggiorno lo stato locale
 let _sbChannel = null;
+let _sbConfigChannel = null;
 function sbSubscribe() {
   if (_sbChannel) return;
   _sbChannel = sb.channel("scadenze-rt")
@@ -319,6 +363,25 @@ function sbSubscribe() {
     .subscribe();
 }
 
+// Realtime anagrafiche: se qualcuno cambia categorie/dipendenti, ricarico la config e rirenderizzo.
+function sbSubscribeConfig() {
+  if (_sbConfigChannel) return;
+  const reload = async () => {
+    try {
+      const [categorie, dipendenti] = await Promise.all([sbLoadCategorie(), sbLoadDipendenti()]);
+      applyConfig(categorie, dipendenti);
+      renderAll();
+      if (typeof renderConfig === "function") renderConfig();
+    } catch (e) {
+      console.error("Errore reload config realtime:", e);
+    }
+  };
+  _sbConfigChannel = sb.channel("config-rt")
+    .on("postgres_changes", { event: "*", schema: "public", table: "categorie" }, reload)
+    .on("postgres_changes", { event: "*", schema: "public", table: "dipendenti" }, reload)
+    .subscribe();
+}
+
 // ---------- Stato ----------
 const _now = new Date();
 const state = {
@@ -326,7 +389,7 @@ const state = {
   modules: [],            // [] = tutte; altrimenti array di module.key selezionati
   status: "all",
   recurFilter: "all",     // "all" | "recurring" | "oneshot"
-  responsabili: [],       // [] = tutti; può contenere "__none__" e/o <nome>
+  responsabili: [],       // [] = tutti; può contenere "__none__" e/o ID dipendente
   query: "",
   view: "list",           // "list" | "calendar" | "history"
   calYear: _now.getFullYear(),
@@ -341,8 +404,11 @@ const MESI_IT = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
 // Carica le scadenze dal cloud (Supabase). Se il cloud e' vuoto, l'app mostra
 // lo stato vuoto naturale; l'utente aggiungera' la prima scadenza dalla UI.
 async function load() {
-  const cloud = await sbLoadAll();
-  state.items = cloud;
+  // Prima le anagrafiche (servono per risolvere categorie/responsabili delle scadenze),
+  // poi le scadenze.
+  const [categorie, dipendenti] = await Promise.all([sbLoadCategorie(), sbLoadDipendenti()]);
+  applyConfig(categorie, dipendenti);
+  state.items = await sbLoadAll();
 }
 
 // ---------- Helpers ----------
@@ -376,8 +442,22 @@ function fmtEuro(n) {
   if (n == null || n === "") return "";
   return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(n);
 }
-function moduleOf(key) {
-  return window.MODULES.find(m => m.key === key) || { key, label: key, icon: "•" };
+function moduleOf(id) {
+  return (window.MODULES || []).find(m => m.key === id)
+    || { key: id, label: "—", icon: "•", bg: "#eef0f4", fg: "#333a45" };
+}
+function activeModules() {
+  return (window.MODULES || []).filter(m => m.attivo);
+}
+function dipendenteOf(id) {
+  return (window.DIPENDENTI || []).find(d => d.id === id) || { id, nome: "—" };
+}
+function activeDipendenti() {
+  return (window.DIPENDENTI || []).filter(d => d.attivo);
+}
+// Array di ID responsabili → array di nomi (per visualizzazione/export)
+function dipNomi(ids) {
+  return (Array.isArray(ids) ? ids : []).map(id => dipendenteOf(id).nome);
 }
 function urgency(days, done) {
   if (done) return "done";
@@ -478,25 +558,30 @@ function renderModules() {
       <span class="mod-ico">📋</span><span class="mod-label">Tutte le scadenze</span>
       <span class="mod-count">${total}</span>
     </button>
-    ${window.MODULES.map(m => {
+    ${activeModules().map(m => {
       const count = state.items.filter(i => i.module === m.key && !i.done).length;
       const checked = state.modules.includes(m.key);
+      // Colore della categoria applicato inline (i colori sono un dato, non più CSS).
       return `
-        <button class="module-btn ${checked ? "active" : ""}" data-module="${m.key}">
+        <button class="module-btn ${checked ? "active" : ""}" data-module="${m.key}" style="background:${m.bg};color:${m.fg}">
           <input type="checkbox" class="mod-check" tabindex="-1" ${checked ? "checked" : ""}>
-          <span class="mod-ico">${m.icon}</span><span class="mod-label">${m.label}</span>
+          <span class="mod-ico">${m.icon}</span><span class="mod-label">${escapeHtml(m.label)}</span>
           <span class="mod-count">${count}</span>
         </button>`;
     }).join("")}
   `;
   nav.querySelectorAll(".module-btn").forEach(btn => {
     btn.addEventListener("click", () => {
-      const key = btn.dataset.module;
+      const raw = btn.dataset.module;
       // "Tutte le scadenze" → svuota la selezione (mostra tutto).
       // Ogni altro modulo → toggle nella selezione (multiselezione, riclicco = rimuovi).
-      if (key === "all") {
+      if (raw === "all") {
         state.modules = [];
-      } else if (state.modules.includes(key)) {
+        renderAll();
+        return;
+      }
+      const key = Number(raw); // gli ID sono numerici
+      if (state.modules.includes(key)) {
         state.modules = state.modules.filter(k => k !== key);
       } else {
         state.modules = [...state.modules, key];
@@ -516,36 +601,40 @@ function personInitials(name) {
 function personColors(value) {
   if (value === "__none__") return { bg: "#e9ebef", fg: "#6b7280" };
   // Tinte distribuite uniformemente sul cerchio in base alla posizione in DIPENDENTI:
-  // così risultano ben distinte tra loro (non più hash → niente collisioni). Tenui.
+  // così risultano ben distinte tra loro. value = ID dipendente.
   const list = window.DIPENDENTI || [];
-  const idx = list.indexOf(value);
+  const idx = list.findIndex(d => d.id === value);
   const total = Math.max(list.length, 1);
   const hue = Math.round((idx >= 0 ? idx : 0) * (360 / total) + 15) % 360;
   return { bg: `hsl(${hue} 52% 88%)`, fg: `hsl(${hue} 40% 38%)` };
 }
+// value = ID dipendente (numero) oppure "__none__"
 function personAvatar(value, extraClass = "") {
   const c = personColors(value);
-  const label = value === "__none__" ? "∅" : personInitials(value);
+  const label = value === "__none__" ? "∅" : personInitials(dipendenteOf(value).nome);
   return `<span class="resp-av ${extraClass}" style="background:${c.bg};color:${c.fg}">${escapeHtml(label)}</span>`;
 }
-// Ordina i responsabili alfabeticamente, con "Non assegnato" sempre in fondo
+function respLabel(value) {
+  return value === "__none__" ? "Non assegnato" : dipendenteOf(value).nome;
+}
+// Ordina i responsabili per nome, con "Non assegnato" sempre in fondo
 function compareResp(a, b) {
   if (a === "__none__") return 1;
   if (b === "__none__") return -1;
-  return String(a).localeCompare(String(b), "it");
+  return dipendenteOf(a).nome.localeCompare(dipendenteOf(b).nome, "it");
 }
 
-// ---------- Render dropdown multiselezione Responsabili (lista fissa DIPENDENTI) ----------
+// ---------- Render dropdown multiselezione Responsabili ----------
 function renderResponsabili() {
   const panel = document.getElementById("responsabili-panel");
   const summary = document.getElementById("responsabili-summary");
   if (!panel || !summary) return;
-  const dipendenti = window.DIPENDENTI || [];
+  const dipendenti = activeDipendenti();
 
-  // Conta non-completati per ogni dipendente nel modulo+tipo correnti.
+  // Conta non-completati per ogni dipendente (per ID) nel modulo+tipo correnti.
   // NB: NON applico inResponsabileScope qui (sarebbe circolare).
   const inOtherScope = it => inModuleScope(it) && inRecurScope(it);
-  const counts = Object.fromEntries(dipendenti.map(n => [n, 0]));
+  const counts = Object.fromEntries(dipendenti.map(d => [d.id, 0]));
   let unassigned = 0;
   state.items.forEach(it => {
     if (!inOtherScope(it)) return;
@@ -554,19 +643,16 @@ function renderResponsabili() {
     if (resp.length === 0) {
       unassigned++;
     } else {
-      // Co-responsabili: incrementa il contatore di ciascuno
-      resp.forEach(n => {
-        if (counts[n] !== undefined) counts[n]++;
-      });
+      resp.forEach(id => { if (counts[id] !== undefined) counts[id]++; });
     }
   });
 
   const sel = new Set(state.responsabili);
-  const ordered = [...dipendenti].sort(compareResp); // ordine alfabetico
+  const ordered = [...dipendenti].sort((a, b) => a.nome.localeCompare(b.nome, "it"));
   const row = (value, label, count) => {
     const on = sel.has(value);
     return `
-      <div class="resp-opt ${on ? "on" : ""}" data-value="${escapeHtml(value)}" role="option" aria-selected="${on}">
+      <div class="resp-opt ${on ? "on" : ""}" data-value="${value}" role="option" aria-selected="${on}">
         ${personAvatar(value)}
         <span class="resp-nm">${escapeHtml(label)}</span>
         <span class="resp-ct">${count}</span>
@@ -574,18 +660,16 @@ function renderResponsabili() {
       </div>`;
   };
   panel.innerHTML =
-    ordered.map(name => row(name, name, counts[name])).join("") +
+    ordered.map(d => row(d.id, d.nome, counts[d.id])).join("") +
     row("__none__", "Non assegnato", unassigned);
 
-  // Riepilogo sul bottone: "Tutti" se vuoto; avatar singolo + nome se uno solo;
-  // avatar impilati (max 4) + "N selezionati" se più di uno.
+  // Riepilogo sul bottone
   const selected = [...state.responsabili].sort(compareResp);
   const n = selected.length;
   if (n === 0) {
     summary.innerHTML = `<span class="resp-summary-text">Tutti</span>`;
   } else if (n === 1) {
-    const label = selected[0] === "__none__" ? "Non assegnato" : selected[0];
-    summary.innerHTML = `${personAvatar(selected[0])}<span class="resp-summary-text">${escapeHtml(label)}</span>`;
+    summary.innerHTML = `${personAvatar(selected[0])}<span class="resp-summary-text">${escapeHtml(respLabel(selected[0]))}</span>`;
   } else {
     const avatars = selected.slice(0, 4).map(v => personAvatar(v)).join("");
     const more = n > 4 ? `<span class="resp-more">+${n - 4}</span>` : "";
@@ -641,7 +725,7 @@ function visibleItems() {
     })
     .filter(it => {
       if (!q) return true;
-      const respText = (Array.isArray(it.responsabili) ? it.responsabili.join(" ") : "").toLowerCase();
+      const respText = dipNomi(it.responsabili).join(" ").toLowerCase();
       return (it.title || "").toLowerCase().includes(q)
         || (it.description || "").toLowerCase().includes(q)
         || respText.includes(q);
@@ -675,10 +759,10 @@ function renderList() {
           <strong>${escapeHtml(it.title)}</strong>
           ${noteParts.length ? `<span class="note">${escapeHtml(noteParts.join(" · "))}</span>` : ""}
         </div>
-        <div><span class="chip ${it.module}">${mod.icon} ${mod.short || mod.label}</span></div>
+        <div><span class="chip" style="background:${mod.bg};color:${mod.fg}">${mod.icon} ${escapeHtml(mod.short || mod.label)}</span></div>
         <div>${fmtDate(it.date)}</div>
         <div class="days-cell ${color}" title="${it.done ? 'completata' : days + ' giorni'}">${daysTxt}</div>
-        <div class="ref-cell">${escapeHtml((Array.isArray(it.responsabili) && it.responsabili.length) ? it.responsabili.join(", ") : "—")}</div>
+        <div class="ref-cell">${escapeHtml(dipNomi(it.responsabili).join(", ") || "—")}</div>
         <div class="rec-cell">${recurLabel(it)}</div>
       </div>`;
   }).join("");
@@ -750,6 +834,14 @@ function renderCalendar() {
   const y = state.calYear, m = state.calMonth;
   title.textContent = `${MESI_IT[m]} ${y}`;
 
+  // Legenda categorie (dinamica, colori dal dato) + voce "proiezione"
+  const legend = document.getElementById("cal-legend");
+  if (legend) {
+    legend.innerHTML = activeModules().map(mod =>
+      `<span class="leg"><i class="leg-chip" style="background:${mod.bg};border-left-color:${mod.fg}"></i>${escapeHtml(mod.label)}</span>`
+    ).join("") + `<span class="leg">↻<i style="opacity:.55;font-style:italic"> proiezione</i></span>`;
+  }
+
   // Primo giorno del mese, offset settimana (lunedì = 0)
   const first = new Date(y, m, 1);
   const startOffset = (first.getDay() + 6) % 7;
@@ -783,12 +875,14 @@ function renderCalendar() {
       const isDone = !isVirtual && it.done;
       const prefix = isVirtual ? "↻ " : (isDone ? "✓ " : "");
       const label = prefix + it.title;
-      // Colore = categoria/modulo (non più urgenza). "done" e "virtual" sono modifier visuali.
-      const cls = `cal-event ${it.module}${isDone ? " done" : ""}${isVirtual ? " virtual" : ""}`;
+      // Colore = categoria (ora un dato, applicato inline). "done"/"virtual" restano modifier CSS.
+      const mod = moduleOf(it.module);
+      const cls = `cal-event${isDone ? " done" : ""}${isVirtual ? " virtual" : ""}`;
+      const nomi = dipNomi(it.responsabili);
       const tip = isVirtual
         ? `${it.title} — occorrenza proiettata (prossima attiva: ${fmtDate(it.date)})`
-        : `${it.title}${(Array.isArray(it.responsabili) && it.responsabili.length) ? " — " + it.responsabili.join(", ") : ""}`;
-      return `<div class="${cls}" data-id="${it.id}" title="${escapeHtml(tip)}">${escapeHtml(label)}</div>`;
+        : `${it.title}${nomi.length ? " — " + nomi.join(", ") : ""}`;
+      return `<div class="${cls}" data-id="${it.id}" style="background:${mod.bg};color:${mod.fg};border-left-color:${mod.fg}" title="${escapeHtml(tip)}">${escapeHtml(label)}</div>`;
     }).join("");
     const more = c.events.length > MAX_EVENTS
       ? `<div class="cal-more">+${c.events.length - MAX_EVENTS} altri</div>` : "";
@@ -921,7 +1015,7 @@ function renderHistoryView() {
           <strong>${escapeHtml(it.title)}</strong>
           ${e.note ? `<span class="hist-note">${escapeHtml(e.note)}</span>` : ""}
         </div>
-        <div><span class="chip ${it.module}">${mod.icon} ${mod.short || mod.label}</span></div>
+        <div><span class="chip" style="background:${mod.bg};color:${mod.fg}">${mod.icon} ${escapeHtml(mod.short || mod.label)}</span></div>
         <div class="hist-late ${lateClass}">${lateLabel}</div>
         <div class="hist-by-cell">${escapeHtml(e.doneBy || "—")}</div>
       </div>`;
@@ -1101,11 +1195,8 @@ function renderHistory(item) {
 // ---------- Modal ----------
 function populateModuleSelect() {
   const moduleSel = document.getElementById("f-module");
-  const mods = window.MODULES || [];
-  if (!mods.length) {
-    console.error("MODULES non definito — data.js non caricato?");
-    return;
-  }
+  const mods = activeModules();
+  if (!mods.length) return; // anagrafiche non ancora caricate
   moduleSel.innerHTML = mods
     .map(m => `<option value="${m.key}">${m.icon} ${m.label}</option>`)
     .join("");
@@ -1114,18 +1205,18 @@ function populateModuleSelect() {
 function populateResponsabiliCheckboxes(selected = []) {
   const wrap = document.getElementById("f-responsabili");
   if (!wrap) return;
-  const dipendenti = window.DIPENDENTI || [];
+  const dipendenti = activeDipendenti();
   const sel = new Set(Array.isArray(selected) ? selected : []);
-  wrap.innerHTML = dipendenti.map(name => `
+  wrap.innerHTML = dipendenti.map(d => `
     <label>
-      <input type="checkbox" name="responsabili" value="${escapeHtml(name)}" ${sel.has(name) ? "checked" : ""}>
-      <span>${escapeHtml(name)}</span>
+      <input type="checkbox" name="responsabili" value="${d.id}" ${sel.has(d.id) ? "checked" : ""}>
+      <span>${escapeHtml(d.nome)}</span>
     </label>`).join("");
 }
 
 function readResponsabiliFromForm() {
   return Array.from(document.querySelectorAll('#f-responsabili input[type="checkbox"]:checked'))
-    .map(c => c.value);
+    .map(c => Number(c.value)); // gli ID sono numerici
 }
 
 let _modalMode = "edit"; // "read" | "edit"
@@ -1145,7 +1236,8 @@ function openModal(item, mode, fromStorico = false) {
   document.getElementById("f-id").value = item?.id || "";
   document.getElementById("f-title").value = item?.title || "";
   document.getElementById("f-description").value = item?.description || "";
-  document.getElementById("f-module").value = item?.module || window.MODULES[0].key;
+  const firstModuleId = activeModules()[0] && activeModules()[0].key;
+  document.getElementById("f-module").value = String(item?.module ?? firstModuleId ?? "");
   setDateField(item?.date || todayISO());
   populateResponsabiliCheckboxes(item?.responsabili || []);
   document.getElementById("f-recur-type").value = item?.recurType || "none";
@@ -1227,7 +1319,7 @@ async function saveFromForm(e) {
   const data = {
     title: document.getElementById("f-title").value.trim(),
     description: document.getElementById("f-description").value.trim(),
-    module: document.getElementById("f-module").value,
+    module: Number(document.getElementById("f-module").value), // ID categoria (numerico)
     date: document.getElementById("f-date").value,
     responsabili: readResponsabiliFromForm(),
     recurType: document.getElementById("f-recur-type").value,
@@ -1289,7 +1381,7 @@ function exportXlsx() {
     "Descrizione": it.description || "",
     "Data scadenza": it.date,
     "Giorni alla scadenza": it.done ? "" : daysBetween(it.date),
-    "Responsabili": (Array.isArray(it.responsabili) ? it.responsabili : []).join(", "),
+    "Responsabili": dipNomi(it.responsabili).join(", "),
     "Ricorrenza": recurLabel(it),
     "Ultima esecuzione": it.lastDoneAt || it.doneAt || "",
     "Eseguito da (ultima)": it.lastDoneBy || it.doneBy || "",
@@ -1416,13 +1508,20 @@ function parseImportedRecur(s) {
   const type = stem === "giorn" ? "day" : stem === "mes" ? "month" : "year";
   return { recurType: type, recurN: n };
 }
-function moduleKeyByLabel(label) {
+// Risolve un'etichetta categoria (testo dell'Excel) → ID categoria
+function moduleIdByLabel(label) {
   if (!label) return null;
   const norm = String(label).toLowerCase().trim();
-  const exact = window.MODULES.find(m => m.label.toLowerCase() === norm);
+  const exact = (window.MODULES || []).find(m => m.label.toLowerCase() === norm);
   if (exact) return exact.key;
-  const partial = window.MODULES.find(m => norm.includes(m.key) || norm.includes(m.label.toLowerCase()));
+  const partial = (window.MODULES || []).find(m => norm.includes(m.label.toLowerCase()));
   return partial ? partial.key : null;
+}
+// Risolve un nome dipendente (testo dell'Excel) → ID dipendente (solo attivi)
+function dipendenteIdByNome(nome) {
+  const norm = String(nome).toLowerCase().trim();
+  const d = activeDipendenti().find(x => x.nome.toLowerCase() === norm);
+  return d ? d.id : null;
 }
 function pick(row, ...keys) {
   for (const k of keys) {
@@ -1452,8 +1551,8 @@ function importXlsx(file) {
         const dateRaw = pick(r, "Data scadenza", "Data", "data", "Date");
         const date = parseImportedDate(dateRaw);
         if (!date) { errors.push(`Riga ${i + 2}: data non valida (${dateRaw})`); return; }
-        const modKey = moduleKeyByLabel(pick(r, "Modulo", "modulo", "Module"))
-          || (window.MODULES[0] && window.MODULES[0].key) || "fisco";
+        const modKey = moduleIdByLabel(pick(r, "Modulo", "modulo", "Module"))
+          || (activeModules()[0] && activeModules()[0].key) || null;
         const { recurType, recurN } = parseImportedRecur(pick(r, "Ricorrenza", "ricorrenza"));
         const stato = String(pick(r, "Stato", "stato")).toLowerCase().trim();
         const done = stato === "completata" || stato === "fatta" || stato === "done";
@@ -1470,8 +1569,8 @@ function importXlsx(file) {
           date,
           responsabili: String(pick(r, "Responsabili", "responsabili", "Responsabile", "responsabile") || "")
             .split(",")
-            .map(s => s.trim())
-            .filter(s => s && (window.DIPENDENTI || []).includes(s)),
+            .map(s => dipendenteIdByNome(s))
+            .filter(id => id != null),
           recurType, recurN,
           done
         };
@@ -1553,7 +1652,7 @@ function downloadTemplate() {
       "uno tra: Personale | Fisco | Manutenzione | Fornitori | Clienti | Utenze (match parziale supportato)"],
     ["Data scadenza", "SÌ", "formati ammessi: 2026-09-30 (ISO), 30/09/2026, 30-09-2026, oppure data nativa Excel"],
     ["Responsabili", "no",
-      "uno o più dipendenti separati da virgola. Valori ammessi (lista corrente): " + (window.DIPENDENTI || []).join(", ") + ". Es. 'Marco' oppure 'Marco, Valentina'. Nomi sconosciuti vengono ignorati."],
+      "uno o più dipendenti separati da virgola. Valori ammessi (lista corrente): " + activeDipendenti().map(d => d.nome).join(", ") + ". Es. 'Marco' oppure 'Marco, Valentina'. Nomi sconosciuti vengono ignorati."],
     ["Ricorrenza", "no",
       "formula 'ogni N giorni|mesi|anni'. Esempi: 'ogni 1 mese', 'ogni 2 mesi', 'ogni 3 mesi', 'ogni 1 anno'. VUOTO = una tantum"]
   ];
@@ -1685,6 +1784,360 @@ document.getElementById("file-import").addEventListener("change", (e) => {
   e.target.value = "";
 });
 
+// ============================================================
+//  PANNELLO CONFIGURAZIONE (anagrafiche: dipendenti + categorie)
+// ============================================================
+const CFG_PALETTE = [
+  { bg: "#dcfce7", fg: "#166534" }, { bg: "#f3e8ff", fg: "#6b21a8" },
+  { bg: "#ffedd5", fg: "#9a3412" }, { bg: "#fef3c7", fg: "#854d0e" },
+  { bg: "#dbeafe", fg: "#1e40af" }, { bg: "#ccfbf1", fg: "#134e4a" },
+  { bg: "#fce7f3", fg: "#9d174d" }, { bg: "#fee2e2", fg: "#b91c1c" },
+  { bg: "#e5e7eb", fg: "#374151" }, { bg: "#e7ded2", fg: "#7c5a33" },
+  { bg: "#e6efb8", fg: "#4d7c0f" }
+];
+const CFG_EMOJIS = ["📋","🗂️","📁","💼","📦","🤝","⚖️","🔧","⚡","💧","🔥","🛡️",
+  "🏢","🚗","🩺","🧾","💳","📅","📞","✉️","🔑","🌱","♻️","📊","🔒","🧯","🏗️","🖥️"];
+
+// --- CRUD Supabase anagrafiche ---
+async function sbInsertDipendente(fields) {
+  const { data, error } = await sb.from("dipendenti").insert(fields).select().single();
+  if (error) { await handleAuthErrorIfAny(error); throw new Error(error.message); }
+  return data;
+}
+async function sbUpdateDipendente(id, fields) {
+  const { error } = await sb.from("dipendenti").update(fields).eq("id", id);
+  if (error) { await handleAuthErrorIfAny(error); throw new Error(error.message); }
+}
+async function sbDeleteDipendente(id) {
+  const { error } = await sb.from("dipendenti").delete().eq("id", id);
+  if (error) { await handleAuthErrorIfAny(error); throw new Error(error.message); }
+}
+async function sbInsertCategoria(fields) {
+  const { data, error } = await sb.from("categorie").insert(fields).select().single();
+  if (error) { await handleAuthErrorIfAny(error); throw new Error(error.message); }
+  return data;
+}
+async function sbUpdateCategoria(id, fields) {
+  const { error } = await sb.from("categorie").update(fields).eq("id", id);
+  if (error) { await handleAuthErrorIfAny(error); throw new Error(error.message); }
+}
+async function sbDeleteCategoria(id) {
+  const { error } = await sb.from("categorie").delete().eq("id", id);
+  if (error) { await handleAuthErrorIfAny(error); throw new Error(error.message); }
+}
+
+// --- Ricariche ---
+async function reloadConfig() {
+  const [c, d] = await Promise.all([sbLoadCategorie(), sbLoadDipendenti()]);
+  applyConfig(c, d);
+  renderAll();
+  renderConfig();
+}
+async function reloadAllData() { // anche le scadenze (dopo riassegnazioni)
+  const [c, d] = await Promise.all([sbLoadCategorie(), sbLoadDipendenti()]);
+  applyConfig(c, d);
+  state.items = await sbLoadAll();
+  renderAll();
+  renderConfig();
+}
+
+// --- Conteggi d'uso ---
+function dipUsage(id) {
+  return state.items.filter(it => Array.isArray(it.responsabili) && it.responsabili.includes(id)).length;
+}
+function catUsage(id) {
+  return state.items.filter(it => it.module === id).length;
+}
+
+// --- Modifiche di massa alle scadenze (per eliminazioni) ---
+async function reassignModule(oldId, newId) {
+  const changed = [];
+  state.items.forEach(it => { if (it.module === oldId) { it.module = newId; changed.push(it); } });
+  if (changed.length) await sbUpsertMany(changed);
+}
+async function replaceResponsabile(oldId, newId) {
+  const changed = [];
+  state.items.forEach(it => {
+    if (Array.isArray(it.responsabili) && it.responsabili.includes(oldId)) {
+      it.responsabili = [...new Set(it.responsabili.map(r => r === oldId ? newId : r))];
+      changed.push(it);
+    }
+  });
+  if (changed.length) await sbUpsertMany(changed);
+}
+async function removeResponsabile(id) {
+  const changed = [];
+  state.items.forEach(it => {
+    if (Array.isArray(it.responsabili) && it.responsabili.includes(id)) {
+      it.responsabili = it.responsabili.filter(r => r !== id);
+      changed.push(it);
+    }
+  });
+  if (changed.length) await sbUpsertMany(changed);
+}
+
+// --- Apertura / render ---
+let _cfgTab = "dip";
+function openConfig() {
+  document.getElementById("config-modal").hidden = false;
+  renderConfig();
+}
+function closeConfig() {
+  document.getElementById("config-modal").hidden = true;
+  closeCfgPops();
+  closeCfgDialog();
+}
+function renderConfig() {
+  if (document.getElementById("config-modal").hidden) return;
+  renderCfgDip();
+  renderCfgCat();
+}
+function renderCfgDip() {
+  const wrap = document.getElementById("cfg-dip-rows");
+  if (!wrap) return;
+  const list = window.DIPENDENTI || [];
+  wrap.innerHTML = list.map((d, i) => {
+    const hue = Math.round(i * (360 / Math.max(list.length, 1)) + 15) % 360;
+    const u = dipUsage(d.id);
+    return `
+      <div class="cfg-row dip">
+        <span class="cfg-av" style="background:hsl(${hue} 45% 52%)">${escapeHtml(personInitials(d.nome))}</span>
+        <div>
+          <input class="cfg-cell" data-dip-name="${d.id}" value="${escapeHtml(d.nome)}" placeholder="Nome…">
+          ${u ? `<span class="cfg-count">· ${u} scad.</span>` : ""}
+        </div>
+        <button class="cfg-del" data-dip-del="${d.id}" title="Elimina">🗑️</button>
+      </div>`;
+  }).join("");
+}
+function renderCfgCat() {
+  const wrap = document.getElementById("cfg-cat-rows");
+  if (!wrap) return;
+  wrap.innerHTML = (window.MODULES || []).map(m => {
+    const u = catUsage(m.key);
+    return `
+      <div class="cfg-row cat">
+        <span style="display:flex;align-items:center;gap:6px;min-width:0">
+          <label class="cfg-cat-edit" style="background:${m.bg};color:${m.fg}">
+            <span>${m.icon}</span>
+            <input data-cat-name="${m.key}" value="${escapeHtml(m.label)}" placeholder="nome categoria…">
+          </label>${u ? `<span class="cfg-count">· ${u} scad.</span>` : ""}
+        </span>
+        <button class="cfg-icon-btn" data-cat-icon="${m.key}">${m.icon}</button>
+        <button class="cfg-color-btn" data-cat-color="${m.key}"><span class="sw" style="background:${m.bg}"></span></button>
+        <button class="cfg-del" data-cat-del="${m.key}" title="Elimina">🗑️</button>
+      </div>`;
+  }).join("");
+}
+
+// --- Popover icone / colori ---
+let _cfgPickCat = null;
+function placeCfgPop(pop, btn) {
+  const r = btn.getBoundingClientRect();
+  pop.style.left = Math.max(8, window.scrollX + r.left - 90) + "px";
+  pop.style.top = (window.scrollY + r.bottom + 6) + "px";
+  pop.hidden = false;
+}
+function closeCfgPops() {
+  document.getElementById("cfg-emoji-pop").hidden = true;
+  document.getElementById("cfg-color-pop").hidden = true;
+  _cfgPickCat = null;
+}
+function openEmojiPicker(catId, btn) {
+  closeCfgPops();
+  _cfgPickCat = catId;
+  document.getElementById("cfg-emoji-grid").innerHTML =
+    CFG_EMOJIS.map(e => `<button data-e="${e}">${e}</button>`).join("");
+  placeCfgPop(document.getElementById("cfg-emoji-pop"), btn);
+}
+function openColorPicker(catId, btn) {
+  closeCfgPops();
+  _cfgPickCat = catId;
+  const usedByOthers = new Set((window.MODULES || []).filter(m => m.key !== catId).map(m => m.bg));
+  const cur = moduleOf(catId).bg;
+  document.getElementById("cfg-color-grid").innerHTML = CFG_PALETTE.map(p =>
+    `<span class="cg ${p.bg === cur ? "on" : ""} ${usedByOthers.has(p.bg) ? "used" : ""}" data-bg="${p.bg}" data-fg="${p.fg}" style="background:${p.bg}" title="${usedByOthers.has(p.bg) ? "già usato" : ""}"></span>`
+  ).join("");
+  placeCfgPop(document.getElementById("cfg-color-pop"), btn);
+}
+
+// --- Dialog conferma/riassegnazione ---
+function openCfgDialog(html) {
+  document.getElementById("cfg-dialog-body").innerHTML = html;
+  document.getElementById("cfg-dialog-modal").hidden = false;
+}
+function closeCfgDialog() {
+  document.getElementById("cfg-dialog-modal").hidden = true;
+}
+function openDeleteCat(id) {
+  const m = moduleOf(id);
+  const u = catUsage(id);
+  const others = (window.MODULES || []).filter(x => x.key !== id && x.attivo);
+  if (u > 0) {
+    if (!others.length) {
+      openCfgDialog(`<h3>Impossibile eliminare</h3>
+        <p>"${escapeHtml(m.label)}" ha ${u} scadenze, ma non c'è un'altra categoria attiva dove spostarle. Creane/attivane un'altra prima.</p>
+        <div class="cfg-dialog-acts"><button class="ghost-btn" data-cfgact="cancel">Chiudi</button></div>`);
+      return;
+    }
+    openCfgDialog(`<h3>Eliminare "${escapeHtml(m.label)}"?</h3>
+      <p><strong>${u} scadenze</strong> usano questa categoria. Spostale in un'altra, poi la elimino.</p>
+      <select id="cfg-reassign-cat">${others.map(o => `<option value="${o.key}">${o.icon} ${escapeHtml(o.label)}</option>`).join("")}</select>
+      <div class="cfg-dialog-acts">
+        <button class="ghost-btn" data-cfgact="cancel">Annulla</button>
+        <button class="primary-btn" data-cfgact="cat-reassign" data-id="${id}">Sposta ed elimina</button>
+      </div>`);
+  } else {
+    openCfgDialog(`<h3>Eliminare "${escapeHtml(m.label)}"?</h3>
+      <p>Nessuna scadenza la usa: si può eliminare senza conseguenze.</p>
+      <div class="cfg-dialog-acts">
+        <button class="ghost-btn" data-cfgact="cancel">Annulla</button>
+        <button class="ghost-btn danger" data-cfgact="cat-delete" data-id="${id}">Elimina</button>
+      </div>`);
+  }
+}
+function openDeleteDip(id) {
+  const d = dipendenteOf(id);
+  const u = dipUsage(id);
+  const others = (window.DIPENDENTI || []).filter(x => x.id !== id && x.attivo);
+  if (u > 0) {
+    const replaceMode = others.length
+      ? `<label><input type="radio" name="cfgdipmode" value="replace" checked> Sostituiscilo con:
+           <select id="cfg-reassign-dip" style="flex:1;margin:0">${others.map(o => `<option value="${o.id}">${escapeHtml(o.nome)}</option>`).join("")}</select></label>`
+      : "";
+    openCfgDialog(`<h3>Eliminare "${escapeHtml(d.nome)}"?</h3>
+      <p><strong>${escapeHtml(d.nome)}</strong> è responsabile di <strong>${u} scadenze</strong>. Scegli cosa fare:</p>
+      <div class="cfg-dialog-modes">
+        ${replaceMode}
+        <label><input type="radio" name="cfgdipmode" value="remove" ${others.length ? "" : "checked"}> Rimuovilo soltanto (le scadenze restano agli altri responsabili)</label>
+      </div>
+      <div class="cfg-dialog-acts">
+        <button class="ghost-btn" data-cfgact="cancel">Annulla</button>
+        <button class="primary-btn" data-cfgact="dip-confirm" data-id="${id}">Conferma ed elimina</button>
+      </div>`);
+  } else {
+    openCfgDialog(`<h3>Eliminare "${escapeHtml(d.nome)}"?</h3>
+      <p>Non è responsabile di nessuna scadenza: si può eliminare senza conseguenze.</p>
+      <div class="cfg-dialog-acts">
+        <button class="ghost-btn" data-cfgact="cancel">Annulla</button>
+        <button class="ghost-btn danger" data-cfgact="dip-delete" data-id="${id}">Elimina</button>
+      </div>`);
+  }
+}
+
+// --- Wiring pannello ---
+document.getElementById("btn-config").addEventListener("click", openConfig);
+document.getElementById("config-close").addEventListener("click", closeConfig);
+document.getElementById("config-modal").addEventListener("click", (e) => {
+  if (e.target.id === "config-modal") closeConfig();
+});
+document.querySelectorAll(".config-tab").forEach(t => t.addEventListener("click", () => {
+  _cfgTab = t.dataset.cfgtab;
+  document.querySelectorAll(".config-tab").forEach(x => x.classList.toggle("active", x === t));
+  document.getElementById("config-body-dip").hidden = _cfgTab !== "dip";
+  document.getElementById("config-body-cat").hidden = _cfgTab !== "cat";
+}));
+
+// Dipendenti: rename (change), avatar live (input), toggle attivo, elimina
+document.getElementById("config-body-dip").addEventListener("change", async (e) => {
+  const nm = e.target.closest("input[data-dip-name]");
+  if (nm) { try { await sbUpdateDipendente(Number(nm.dataset.dipName), { nome: nm.value.trim() }); await reloadConfig(); } catch (err) { alert("Errore: " + err.message); } return; }
+});
+document.getElementById("config-body-dip").addEventListener("input", (e) => {
+  const nm = e.target.closest("input[data-dip-name]");
+  if (nm) { const av = nm.closest(".cfg-row").querySelector(".cfg-av"); if (av) av.textContent = personInitials(nm.value); }
+});
+document.getElementById("config-body-dip").addEventListener("click", (e) => {
+  const del = e.target.closest("[data-dip-del]");
+  if (del) openDeleteDip(Number(del.dataset.dipDel));
+});
+document.getElementById("cfg-add-dip").addEventListener("click", async () => {
+  try {
+    await sbInsertDipendente({ nome: "Nuovo", ordine: (window.DIPENDENTI || []).length + 1 });
+    await reloadConfig();
+    const inputs = document.querySelectorAll("#cfg-dip-rows input[data-dip-name]");
+    if (inputs.length) { const last = inputs[inputs.length - 1]; last.focus(); last.select(); }
+  } catch (err) { alert("Errore: " + err.message); }
+});
+
+// Categorie: rename (change), toggle attivo, icona, colore, elimina
+document.getElementById("config-body-cat").addEventListener("change", async (e) => {
+  const nm = e.target.closest("input[data-cat-name]");
+  if (nm) { try { await sbUpdateCategoria(Number(nm.dataset.catName), { label: nm.value.trim() }); await reloadConfig(); } catch (err) { alert("Errore: " + err.message); } return; }
+});
+document.getElementById("config-body-cat").addEventListener("click", (e) => {
+  const ib = e.target.closest("[data-cat-icon]");
+  if (ib) { openEmojiPicker(Number(ib.dataset.catIcon), ib); return; }
+  const cb = e.target.closest("[data-cat-color]");
+  if (cb) { openColorPicker(Number(cb.dataset.catColor), cb); return; }
+  const del = e.target.closest("[data-cat-del]");
+  if (del) { openDeleteCat(Number(del.dataset.catDel)); return; }
+});
+document.getElementById("cfg-add-cat").addEventListener("click", async () => {
+  try {
+    const used = new Set((window.MODULES || []).map(m => m.bg));
+    const free = CFG_PALETTE.find(p => !used.has(p.bg)) || CFG_PALETTE[0];
+    await sbInsertCategoria({ label: "", icon: "📋", colore_bg: free.bg, colore_testo: free.fg, ordine: (window.MODULES || []).length + 1 });
+    await reloadConfig();
+    const inputs = document.querySelectorAll("#cfg-cat-rows input[data-cat-name]");
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  } catch (err) { alert("Errore: " + err.message); }
+});
+
+// Popover icone
+document.getElementById("cfg-emoji-grid").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-e]");
+  if (!b || _cfgPickCat == null) return;
+  const id = _cfgPickCat; closeCfgPops();
+  try { await sbUpdateCategoria(id, { icon: b.dataset.e }); await reloadConfig(); } catch (err) { alert("Errore: " + err.message); }
+});
+// Popover colori
+document.getElementById("cfg-color-grid").addEventListener("click", async (e) => {
+  const s = e.target.closest(".cg");
+  if (!s || _cfgPickCat == null) return;
+  const id = _cfgPickCat; closeCfgPops();
+  try { await sbUpdateCategoria(id, { colore_bg: s.dataset.bg, colore_testo: s.dataset.fg }); await reloadConfig(); } catch (err) { alert("Errore: " + err.message); }
+});
+// Click fuori → chiudi popover
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".cfg-pop") && !e.target.closest("[data-cat-icon]") && !e.target.closest("[data-cat-color]")) closeCfgPops();
+});
+
+// Dialog: azioni
+document.getElementById("cfg-dialog-modal").addEventListener("click", async (e) => {
+  if (e.target.id === "cfg-dialog-modal") { closeCfgDialog(); return; }
+  const b = e.target.closest("[data-cfgact]");
+  if (!b) return;
+  const act = b.dataset.cfgact;
+  if (act === "cancel") { closeCfgDialog(); return; }
+  const id = Number(b.dataset.id);
+  try {
+    if (act === "cat-delete") {
+      await sbDeleteCategoria(id);
+    } else if (act === "cat-reassign") {
+      const to = Number(document.getElementById("cfg-reassign-cat").value);
+      await reassignModule(id, to);   // prima sposto le scadenze (la FK lo richiede)
+      await sbDeleteCategoria(id);
+    } else if (act === "dip-delete") {
+      await sbDeleteDipendente(id);
+    } else if (act === "dip-confirm") {
+      const mode = (document.querySelector('input[name="cfgdipmode"]:checked') || {}).value;
+      if (mode === "replace") {
+        await replaceResponsabile(id, Number(document.getElementById("cfg-reassign-dip").value));
+      } else {
+        await removeResponsabile(id);
+      }
+      await sbDeleteDipendente(id);
+    }
+    closeCfgDialog();
+    await reloadAllData(); // ricarico anche le scadenze (sono cambiate)
+  } catch (err) {
+    alert("Errore: " + err.message);
+    closeCfgDialog();
+    try { await reloadAllData(); } catch (_) {}
+  }
+});
+
 // Drawer (sidebar mobile)
 document.getElementById("hamburger").addEventListener("click", () => toggleDrawer(true));
 document.getElementById("drawer-backdrop").addEventListener("click", () => toggleDrawer(false));
@@ -1714,7 +2167,8 @@ document.getElementById("responsabili-toggle").addEventListener("click", toggleR
 document.getElementById("responsabili-panel").addEventListener("click", (e) => {
   const opt = e.target.closest(".resp-opt");
   if (!opt) return;
-  const value = opt.dataset.value;
+  const raw = opt.dataset.value;
+  const value = raw === "__none__" ? raw : Number(raw); // gli ID sono numerici
   if (state.responsabili.includes(value)) {
     state.responsabili = state.responsabili.filter(v => v !== value);
   } else {
@@ -1748,6 +2202,12 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   // Calendario data aperto → Esc chiude solo quello (lo fa flatpickr), non il modal.
   if (_fpDate && _fpDate.isOpen) return;
+  // Pannello configurazione: prima i popover, poi il dialog, poi la modale.
+  const emojiPop = document.getElementById("cfg-emoji-pop");
+  const colorPop = document.getElementById("cfg-color-pop");
+  if ((emojiPop && !emojiPop.hidden) || (colorPop && !colorPop.hidden)) { closeCfgPops(); return; }
+  if (!document.getElementById("cfg-dialog-modal").hidden) { closeCfgDialog(); return; }
+  if (!document.getElementById("config-modal").hidden) { closeConfig(); return; }
   // Dropdown multiselezione responsabili aperto → Esc chiude prima quello.
   const respMs = document.getElementById("responsabili-multiselect");
   if (respMs && respMs.classList.contains("open")) { closeResponsabiliPanel(); return; }
@@ -1758,10 +2218,10 @@ document.addEventListener("keydown", (e) => {
 
 // ---------- Avvio ----------
 async function boot() {
-  populateModuleSelect();
-  renderModules();      // sidebar moduli con conteggi a 0
-  renderResponsabili(); // sidebar responsabili (vuota all'inizio)
-  renderKpis();         // KPI a 0
+  // NB: niente populateModuleSelect qui — le anagrafiche arrivano da Supabase con load().
+  renderModules();      // sidebar (vuota finché non carica l'anagrafica)
+  renderResponsabili();
+  renderKpis();
   // Mostra spinner mentre Supabase carica
   document.getElementById("rows").innerHTML =
     '<div style="padding:60px 20px;text-align:center;color:var(--ink-soft);">⏳ Caricamento da Supabase…</div>';
@@ -1777,7 +2237,8 @@ async function boot() {
     return;
   }
   renderAll();
-  sbSubscribe(); // attiva realtime: modifiche degli altri utenti compaiono in tempo reale
+  sbSubscribe();       // realtime scadenze
+  sbSubscribeConfig(); // realtime anagrafiche (categorie/dipendenti)
 }
 
 // ---------- Wire login + auth state ----------
