@@ -108,6 +108,8 @@ Il cuore dell'applicazione. Organizzato in sezioni delimitate da commenti `// --
 
 ## 🗃️ Database (Supabase)
 
+**Dove** (dal 1/11/2026): progetto Supabase «Overland» (`oygatxwjkejmhdbsctvz`), **schema `scadenziario`**, con le tabelle `scadenze`, `categorie` e `dipendenti`. Prima era lo schema `public` del progetto «Scadenziario» (`cqdmfhdcdvaezmexzxrq`, ora in pausa), dove c'era anche la prima versione dell'app HR: non è stata portata (l'HR vero è lo schema `hr`). In «Overland» ogni app di Overland ha il suo schema. Perché l'app funzioni, `scadenziario` deve essere negli «Exposed schemas» (Project Settings › Data API) e gli utenti del login vanno ricreati in «Overland» (Authentication): non si spostano da un progetto all'altro.
+
 ### Tabella `scadenze`
 
 | Colonna | Tipo | Cosa contiene |
