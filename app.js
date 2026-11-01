@@ -1,8 +1,12 @@
 // ============================================================
 // CONFIGURAZIONE SUPABASE — modifica qui se cambi DB
 // ============================================================
-const SUPABASE_URL = "https://cqdmfhdcdvaezmexzxrq.supabase.co";
-const SUPABASE_KEY = "sb_publishable_1ECriACxKWx6_4GPxyMXVQ_MPVc2GYy";
+// Dal 1/11/2026 il database è il progetto «Overland» (oygatxwjkejmhdbsctvz), schema
+// «scadenziario» (scadenze, categorie, dipendenti): copiato dal vecchio progetto
+// «Scadenziario» (cqdmfhdcdvaezmexzxrq), ora in pausa. Uno schema per ogni app di Overland.
+const SUPABASE_URL = "https://oygatxwjkejmhdbsctvz.supabase.co";
+const SUPABASE_KEY = "sb_publishable_xsUEKKIb4UfeStuA8LUadg_K7_QF2Zk";
+const SUPABASE_SCHEMA = "scadenziario";
 
 // (Fix #2) Se la libreria supabase-js non si è caricata (CDN bloccata, offline, ad-blocker),
 // mostriamo un errore amichevole nel login overlay invece di schermata bianca.
@@ -28,6 +32,7 @@ if (typeof window.supabase === "undefined" || typeof window.supabase.createClien
 }
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  db: { schema: SUPABASE_SCHEMA }, // .from() e .rpc() vanno in «scadenziario»; il realtime lo ripete sotto
   auth: {
     persistSession: true,        // salva sessione in localStorage → resti loggato
     autoRefreshToken: true,      // rinnova token JWT automaticamente
@@ -344,7 +349,7 @@ let _sbConfigChannel = null;
 function sbSubscribe() {
   if (_sbChannel) return;
   _sbChannel = sb.channel("scadenze-rt")
-    .on("postgres_changes", { event: "*", schema: "public", table: "scadenze" }, (payload) => {
+    .on("postgres_changes", { event: "*", schema: SUPABASE_SCHEMA, table: "scadenze" }, (payload) => {
       if (payload.eventType === "INSERT") {
         const it = fromSupabase(payload.new);
         if (!state.items.some(i => i.id === it.id)) state.items.push(it);
@@ -376,8 +381,8 @@ function sbSubscribeConfig() {
     }
   };
   _sbConfigChannel = sb.channel("config-rt")
-    .on("postgres_changes", { event: "*", schema: "public", table: "categorie" }, reload)
-    .on("postgres_changes", { event: "*", schema: "public", table: "dipendenti" }, reload)
+    .on("postgres_changes", { event: "*", schema: SUPABASE_SCHEMA, table: "categorie" }, reload)
+    .on("postgres_changes", { event: "*", schema: SUPABASE_SCHEMA, table: "dipendenti" }, reload)
     .subscribe();
 }
 
